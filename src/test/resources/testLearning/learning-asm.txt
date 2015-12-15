@@ -1,0 +1,30 @@
+//  
+//  Learning inchworm assembly. Simplest program.              
+//  
+//
+ 	
+.header
+wordsize: 32
+regptrsize: 5
+romptrsize: 4
+ramptrsize: 4
+instruction: add add xori out zero xori halt
+
+.const
+	one = 1        
+	two = 2
+
+.data
+	%r1 = (one)
+	%r2 = (two)
+
+.code
+	add %out1 < %r1, %r2
+	add %out2 < %r1, %r2
+	xori %ctrl < 0x01
+	out
+	zero %ctrl
+	xori %ctrl < 0xFFFFFFFF         // load ctrl-reg with the exit value (stop condition).
+	halt
+	        
+

@@ -1,0 +1,8 @@
+Computation Result (Program counter = 00249) =  31212
+Computation Result (Program counter = 00253) =  2957
+Computation Result (Program counter = 00257) =  46597
+Computation Result (Program counter = 00261) =  31347
+Computation Result (Program counter = 00265) =  1870
+Computation Result (Program counter = 00269) =  30703
+Computation Result (Program counter = 00273) =  52021
+Computation Result (Program counter = 00277) =  0

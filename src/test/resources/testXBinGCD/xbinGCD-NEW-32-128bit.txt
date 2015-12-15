@@ -1,0 +1,692 @@
+//
+//   xbinGCD subroutine.
+//
+//    assume:   a[0]...a[n-1]     is the first number.
+//              b[0]...b[n-1]     is the second.
+//              alpha[0]...b[n-1] is a temp variable that holds a[].
+//              result = u, a (u*a - v*b = 1)
+//              u[0]...u[n-1] is the u-result.
+//              v[0]...v[n-1] is the v-result.
+//
+
+ 	
+.header
+wordsize: 32
+regptrsize: 7                   // 128 regs (enough for calculating GCD for two 512 bit integers (gcdWidth = 16 * wordsize = 32).
+romptrsize: 7                   // Space for storing 128 instructions.
+ramptrsize: 0
+framesize: 4 
+stackptrsize: 4
+instruction: add loadreg rol and xor add storereg out halt mux or next call return 
+
+.const
+gcdWidth = 4                    // Try size of 128 bits.
+
+
+.data
+// ============================
+// REGISTERS HOLDING FIXED VALUES.
+// ============================
+r_zero:
+0
+r_one:
+1
+r_two:
+2
+r_minusone:
+-1
+r_31left:
+31
+r_const_msb_0:                                             // Bitwise and mask for SHR (set MS bit to zero).
+0x7FFFFFFF
+r_const_msb_1:                                             // Bitwise or mask for SHR (set MS bit to one).
+0x80000000
+
+// ============================
+// REGISTERS HOLDING CODE 'POINTERS'.
+// ============================
+r_label_while1:                                            // main while loop start.
+(label_while1)
+r_label_end_while1:                                        // main while loop end.
+(label_end_while1)
+r_is_alpha_zero:                                           // check alpha routine.
+(label_is_alpha_zero)
+r_shift_right:                                             // shr 1 routine.
+(label_shift_right)
+r_copy_num_while:                                          // copy number routine while loop start.
+(label_copy_num_while)
+r_xor_b_while:                                             // xor b routine while loop start.
+(label_xor_b_while)
+r_and_b_while:                                             // and b routine while loop start.
+(label_and_b_while)
+r_big_add_while:                                           // big-add while loop.
+(label_big_add_while)
+r_big_add_carry:                                           // big-add carry handler.
+(label_big_add_carry)
+r_big_add_next:                                            // big-add advance statement.
+(label_big_add_next)
+r_carry_handler:                                           // carry handler routine.
+(label_carry_handler)
+r_init_u:                                                  // init u routine.
+(label_init_u)
+r_init_v:                                                  // init v routine.
+(label_init_v)
+r_label_saveresults_for:                                   // save result routine for loop start.
+(label_saveresults_for)
+r_label_end_program:                                       // program ending statement.
+(label_end_program)
+
+// ============================
+// REGISTERS USED FOR CALCULATION.
+// ============================
+r_nextIp:                       // Next IP register.     #23
+0
+r_regFor1:                      // for loop counter.
+0
+r_regCheck1:                    // Number of for loop iterations.
+0
+r_regNdx1:
+0
+r_regNdx2:
+0
+r_regNdx3:
+0
+r_regVal1:                      // #29
+0
+r_regVal2:                      //
+0
+r_shiftBase:                    // Holds element[0] of big-int array to shift.
+0
+//
+//
+//
+
+r_gcdWidth:                     // #32
+%r[$] = (gcdWidth)
+r_numA:                         // Points to numA[0]
+%r[$] = ($ + 7)
+r_numB:                         // Points to numB[0]
+%r[$] = ($ + 6 + gcdWidth)
+r_alpha:
+%r[$] = ($ + 5 + 2 * gcdWidth)
+r_resultU:                      // Points to resultU[0]
+%r[$] = ($ + 4 + 3 * gcdWidth)
+r_resultV:                      // Points to resultV[0]
+%r[$] = ($ + 3 + 4 * gcdWidth)
+r_tempUxorB:                    // Points to tempUxorB[0]
+%r[$] = ($ + 2 + 5 * gcdWidth)
+r_tempUandB:                    // Points to tempUandB[0]
+%r[$] = ($ + 1 + 6 * gcdWidth)
+
+// ============================
+// Registers used for  storage.
+// ============================
+numA:                                    // #40 LS word first.
+%r[$] = 0, 0x80000000, 0, 0
+
+numB:
+%r[$] = 0x32122341, 0x1232, 0, 0
+
+//
+//  TEST:      GCD(8000000000000000, 123232122341)    
+//                              LSB    -->   MSB   
+// EXPECTED U:  dec result = 4164982000   2948
+// EXPECTED V:  dec result = 1602982719   2719020343
+//              hex result = 0x5f8b933f   0xa210f537
+//
+
+alpha:                                   // #48
+%r[$] = 0, 0, 0, 0
+
+resultU:                                 // #52
+%r[$] = 0, 0, 0, 0
+
+resultV:                                 // #56
+%r[$] = 0, 0, 0, 0
+
+tempUxorB:                               // #60
+%r[$] = 0, 0, 0, 0
+
+tempUandB:                               // #64
+%r[$] = 0, 0, 0, 0
+
+.code
+
+// ====================================================================
+//          1) init vars.
+// ====================================================================
+next %ip, %r_one  
+call label_init_u                                          // Call init-u routine.
+--- //  0 
+add %r_regNdx2 < %r_zero, %r_alpha                         // init destination pointer (alpha[0]) to initialize alpha.
+next %ip, %r_one  
+call label_init_v                                          // Call init-v routine.
+--- //  1
+add %r_regNdx1 < %r_zero, %r_numA                          // init source pointer (a[0]) to initialize alpha.
+next %ip, %r_one  
+call label_copy_num                                        // Call copy-num routine.
+--- //  2
+
+// ====================================================================
+//          2) GCD main while loop.
+// ====================================================================  
+label_while1:
+//while (alpha > 0)   
+		//
+		// Loop condition check.
+		//
+		next %ip, %r_one
+		call label_is_alpha_zero                               // Call is_alpha_zero routine.  
+--- //  3
+    add %r_nextIp < %r_label_while1, %r_two                // r_nextIp 'points' to next instruction (=5).
+    // r_regVal1 is set by is_alpha_zero to 1 if condition is true. 
+    mux %r_nextIp < %r_regVal1, %r_nextIp, %r_label_end_while1
+    next %r_zero, %r_nextIp                                // Branch to next statement or exit the while loop.
+--- //  4
+//  alpha = alpha >> 1;     
+    add %r_shiftBase < %r_alpha, %r_zero                   // %r_shiftBase points to alpha[0].
+		next %ip, %r_one
+		call label_shift_right                                 // Call shift_right routine.  
+--- //  5
+//  if ((u & 1) == 0) {  // just need to check the LSB of element 0 of u
+    add %r_regVal1 < %r_one, %r_two
+    mux %r_regVal1 < %r[resultU], %r_one, %r_regVal1       // skip shifts if LSB bit is set (last reg op is assigned to %r_regVal1).
+    next %ip, %r_regVal1                                   //
+--- //  6
+//      u = u >> 1;
+		    add %r_shiftBase < %r_resultU, %r_zero             // %r_shiftBase points to r_resultU[0].
+				next %ip, %r_one
+		    call label_shift_right                             // Call shift_right routine.  
+--- //  7
+//      v = v >> 1;
+		    add %r_shiftBase < %r_resultV, %r_zero             // %r_shiftBase points to r_resultV[0].
+				next %r_zero, %r_label_while1
+		    call label_shift_right                             // Call shift_right routine.  
+--- //  8
+//  } else {
+//      u = ((u ^ b) >> 1) + (u & b);
+//      1) copy u to r_tempUxorB
+        add %r_regNdx1 < %r_zero, %r_resultU               // prepare source (r_resultU[0]) to copy from.
+        add %r_regNdx2 < %r_zero, %r_tempUxorB             // prepare destination (r_tempUxorB[0]) to copy b to tempUxorB.
+        next %ip, %r_one                                   //
+--- //  9
+        next %ip, %r_one   
+        call label_copy_num                                // Call copy num routine.
+--- //  10
+label_temp_xor_b:
+//      2) r_tempUxorB = r_tempUxorB xor b
+        add %r_regNdx2 < %r_zero, %r_tempUxorB             // prepare destination (r_tempUxorB[0]) of tempUxorB xor b.
+        next %ip, %r_one
+        call label_xor_b                                   // Call xor_b routine.
+--- //  11
+//      3) r_tempUxorB = shr r_tempUxorB 1
+        add %r_shiftBase < %r_tempUxorB, %r_zero           // %r_shiftBase points to r_tempUxorB[0].
+				next %ip, %r_one
+		    call label_shift_right                             // Call shift_right routine.
+--- //  12
+//      4) u = u and b
+        add %r_regNdx2 < %r_zero, %r_resultU               // prepare destination (r_resultU[0]) of r_resultU and b.
+        next %ip, %r_one
+        call label_and_b                                   // Call and_b routine.
+--- //  13
+//      5) u = big-add u + r_tempUxorB
+        add %r_regNdx1 < %r_zero, %r_tempUxorB             // prepare source (r_tempUxorB[0]) to big-add.
+				add %r_regNdx2 < %r_zero, %r_resultU               // prepare destination (u[0]) to initialize alpha.
+				next %ip, %r_one                                   // Jump to next instruction.
+--- //  14
+				next %ip, %r_one 
+				call label_big_add                                 // Call big-add routine.
+--- //  15
+//      v = (v >> 1) + a;
+//      1) v = shr v 1
+        add %r_shiftBase < %r_resultV, %r_zero             // %r_shiftBase points to r_resultV[0].
+				next %ip, %r_one
+		    call label_shift_right                             // Call shift_right routine.
+--- //  16
+//      2) v = big-add v + a
+        add %r_regNdx1 < %r_zero, %r_numA                  // prepare source (a[0]) to big-add.
+				add %r_regNdx2 < %r_zero, %r_resultV               // prepare destination (v[0]) to initialize alpha.
+				next %ip, %r_one                                   // Jump to next instruction.
+--- //  17
+				next %r_zero, %r_label_while1
+				call label_big_add                                 // Call big-add routine.
+--- //  18
+
+//}   // end-while
+
+label_end_while1:
+
+// ====================================================================
+//          3) save results.
+// ====================================================================   
+   //
+   // Outputs the values in the result arrays (u, v).
+   //
+   // Regs used: %r_regFor1 is the loop counter.
+   //            %r_gcdWidth holds number of iterations.
+   //            %r_regCheck1 checks the loop condition.
+   //            %r_regVal1 stores the value to write out.
+   //            %r_regNdx1 points to result[i].
+   // NOTE: %r_resultU is the base address for both arrays.
+   //
+   add %r_regFor1 < %r_zero, %r_zero                       // Reset for counter.
+   add %r_regCheck1 < %r_gcdWidth, %r_gcdWidth             // Double count of rounds to output both  result arrays.
+   next %ip, %r_one                                        //
+--- //  19
+   add %r_regCheck1 < %r_regCheck1, %r_one                 //
+   next %ip, %r_one                                        //
+--- //  20
+label_saveresults_for:  
+//  for (%r_regFor1 = 0 ; %r_regFor1 < %r_gcdWidth; %r_regFor1++)
+      //
+      // Loop condition check.
+      //
+      add %r_zero < %r_zero, %r_zero                       // Dummy add.
+      add %r_regCheck1 < %r_regCheck1, %r_minusone         // decrement number of rounds.
+      mux %r_nextIp < %zero, %r_two, %r_one                // zero is set while condition is true (last reg op is assigned to %r_nextIp).      
+      next %ip, %r_nextIp                                  // Branch to next statement. 
+--- // 21
+      next %r_zero, %r_label_end_program                   // Jump to program ending statement.
+--- // 22
+      add %r_regNdx1 < %r_resultU, %r_regFor1              // %r_regNdx1 points to resultU[i].
+      loadreg %r_regVal1, %r_regNdx1                       // %r_regVal1 contains the value stored in (resultU[i]).
+      add %r[out1] < %r_zero, %r_regVal1                   // store current value in out register.
+      next %ip, %r_one                                     //
+--- // 23
+      add %r[out2] < %r_zero, %r_regVal1                   // store current value in out register.
+      add %ctrl < %r_zero, %r_one                          // load ctrl-reg with the out-stream value.
+      out                                                  // RESULT OF GCD.
+      next %ip, %r_one                                     //
+--- // 24
+      add %ctrl < %r_zero, %r_zero                         // Reset conrtol reg.
+      //
+      // Advance for counter and jump accordingly.
+      // 
+      add %r_regFor1 < %r_regFor1, %r_one                  // inc loop counter (%r_regFor1)
+      next %r_zero, %r_label_saveresults_for               // Set IP to label_saveresults_for.         
+--- // 25
+
+
+// ====================================================================
+//          4) end program.
+// ====================================================================   
+label_end_program:
+      add %ctrl < %r_zero, %r_minusone                     // load ctrl-reg with the stop condition value.
+      halt
+      next %ip, %r_one
+--- // 26
+
+
+// ====================================================================
+//          5) is_alpha_zero check.
+// ====================================================================
+label_is_alpha_zero:
+	 //
+	 // NOTE: r_regVal1 is set to 1 if all elements of alpfa[] are zero.  
+	 //
+   add %r_regFor1 < %r_zero, %r_zero                       // Reset for counter.
+   add %r_regCheck1 < %r_one, %r_gcdWidth                  // Set count of rounds.
+   next %ip, %r_one                                        //
+--- // 27
+//  for (%r_regFor1 = 0 ; %r_regFor1 < %r_gcdWidth; %r_regFor1++)
+      //
+      // Loop condition check.
+      //
+      add %r_zero < %r_zero, %r_zero                       // Dummy add.
+      add %r_regCheck1 < %r_regCheck1, %r_minusone         // decrement number of rounds.
+      mux %r_regVal1 < %zero, %r_two, %r_one               // zero is set while condition is true (last reg op is assigned to %r_regVal1).      
+      next %ip, %r_regVal1                                 // Branch to next statement. 
+--- // 28
+      add %r_regVal1 < %r_zero, %r_one                     // All elements were zero - set r_regVal1 to 1.
+      return
+--- // 29
+      add %r_regNdx1 < %r_alpha, %r_regFor1                // %r_regNdx1 points to alpha[i].
+      loadreg %r_regVal1, %r_regNdx1                       // %r_regVal1 contains the value stored in (resultU[i]).
+      add %r_regVal1 < %r_regVal1, %r_zero                 // add zero to check element.
+      mux %r_regVal1 < %zero, %r_one, %r_two               // zero is set while condition is true (last reg op is assigned to %r_regVal1).  
+      next %ip, %r_regVal1                                 //
+--- // 30
+      add %r_regVal1 < %r_zero, %r_zero                    // Last checked element was not zero - set r_regVal1 to 0.
+      return
+--- // 31
+      //
+      // Advance for counter and jump accordingly.
+      // 
+      add %r_regFor1 < %r_regFor1, %r_one                  // inc loop counter (%r_regFor1)
+      add %r_regVal1 < %r_is_alpha_zero, %r_one
+      next %r_zero, %r_regVal1                             // Set IP to where the for starts.         
+--- // 32
+
+
+// ====================================================================
+//          6) SHR,1 subroutine.
+// ====================================================================
+// Regs used: %r_gcdWidth holds number of iterations.
+//            %r_regCheck1 checks the loop condition.
+//            %r_regVal1, %r_regVal2 hold temp values.
+//            %r_shiftBase points to num_to_shift[0] on entry.
+//            %r_regNdx1 points to num_to_shift[i].
+//            %r_regNdx2 points to num_to_shift[i+1].
+//
+label_shift_right:
+//
+// 1) loop over the array from LSB to MSB, shift right each by one.
+// 2) take the least bit of the next element and put it in the MSB: 
+//    a[i] = (a[i]>>1) | (a[i+1] << (regsize - 1))
+//
+   add %r_regNdx1 < %r_shiftBase, %r_zero
+   add %r_regCheck1 < %r_gcdWidth, %r_one                  // Set count of rounds.
+   next %ip, %r_one                                        //
+--- // 33
+//  while (%r_regCheck1 - 1 > 0)
+      //
+      // Loop condition check.
+      //
+      add %r_zero < %r_zero, %r_zero                       // Dummy add.
+      add %r_regCheck1 < %r_regCheck1, %r_minusone         // decrement number of rounds.
+      mux %r_regVal1 < %zero, %r_two, %r_one               // zero is set while condition is true (last reg op is assigned to %r_regVal1).      
+      next %ip, %r_regVal1                                 // Branch to next statement. 
+--- // 34
+     return
+--- // 35
+// rol a[i], 31                                            // SHR 1
+// and a[i] < a[i], const_msb_0                            // mask out the msbit that was rotated.
+      add %r_regNdx2 < %r_regNdx1, %r_one                  // set r_reNdx2 to point to the adjacent higher word.
+      loadreg %r_regVal1 < %r_regNdx1                      // %r_regVal1 contains the value stored in a[i = %r_regNdx1].
+      rol %r_regVal1 < %r_regVal1, %r_31left               // SHR 1
+      and %r_regVal1 < %r_regVal1, %r_const_msb_0          // mask out the msbit that was rotated.
+      next %ip, %r_one                                     //
+--- // 36
+// If not at the MS word: (%r_regCheck1 - %r_one = 0)
+      add %r_regVal2 < %r_regCheck1, %r_zero               //
+      add %r_regVal2 < %r_regVal2, %r_minusone             // %r_regVal2 = %r_regCheck1 - 1.
+      // check the zero flag for doing the adjacent word.
+      mux %r_regVal2 < %zero, %r_one, %r_two               // skip next instruction if ZF.
+      next %ip, %r_regVal2                                 //
+--- // 37
+// or a[i] < a[i], %r_regVal2      
+      loadreg %r_regVal2 < %r_regNdx2                      // %r_regVal2 =  value of adjacent word (a[i+1]).
+      mux %r_regVal2 < %r_regVal2, %r_zero, %r_const_msb_1 // set the or mask according to the LS bit.
+      or %r_regVal1 < %r_regVal1, %r_regVal2               // or the two words.
+      next %ip, %r_one                                     //
+--- // 38
+      storereg %r_regNdx1, %r_regVal1                      // Store the value into a[i = %r_regNdx1].
+      next %ip, %r_one                                     //
+--- // 39
+// label_shift_right_done:
+      //
+      // Advance for counter and jump accordingly.
+      // 
+      add %r_regNdx1 < %r_regNdx1, %r_one                  // Advance data pointers.
+      add %r_regVal1 < %r_shift_right, %r_one              // point to start of while loop.
+      next %r_zero, %r_regVal1                             // Set IP to where the while starts.         
+--- // 40
+
+
+// ====================================================================
+//          7) Xor subroutine.
+// ====================================================================
+// Regs used: %r_gcdWidth holds number of iterations.
+//            %r_regCheck1 checks the loop condition.
+//            %r_regVal1, %r_regVal2 hold temp values.
+//            %r_regNdx1 points to b[i].
+//            %r_regNdx2 points to destination[i] on entry.
+//
+label_xor_b:                                               //
+   add %r_regNdx1 < %r_zero, %r_numB                       // prepare source (r_numB[0]) to xor with.
+   add %r_regCheck1 < %r_gcdWidth, %r_one                  // Set count of rounds.
+   next %ip, %r_one                                        //
+--- // 41
+label_xor_b_while:
+//  while (%r_regCheck1 - 1 > 0)
+      //
+      // Loop condition check.
+      //
+      add %r_zero < %r_zero, %r_zero                       // Dummy add.
+      add %r_regCheck1 < %r_regCheck1, %r_minusone         // decrement number of rounds.
+      mux %r_regVal1 < %zero, %r_two, %r_one               // zero is set while condition is true (last reg op is assigned to %r_regVal1).      
+      next %ip, %r_regVal1                                 // Branch to next statement. 
+--- // 42
+      return
+--- // 43
+      loadreg %r_regVal1, %r_regNdx1                       // %r_regVal1 contains the value stored in b[i].
+      next %ip, %r_one                                     //
+--- // 44
+      loadreg %r_regVal2, %r_regNdx2                       // %r_regVal2 contains the value stored in dest[i].
+      xor %r_regVal2 < %r_regVal2, %r_regVal1              // xor regs.
+      storereg %r_regNdx2, %r_regVal2                      // Store the value into dest[i].
+      next %ip, %r_one                                     //
+--- // 45
+      add %r_regNdx1 < %r_regNdx1, %r_one                  // Advance data pointers.
+      add %r_regNdx2 < %r_regNdx2, %r_one                  //
+      next %r_zero, %r_xor_b_while                         // Continue looping.
+--- // 46
+
+
+// ====================================================================
+//          8) And subroutine.
+// ====================================================================
+// Regs used: %r_gcdWidth holds number of iterations.
+//            %r_regCheck1 checks the loop condition.
+//            %r_regVal1, %r_regVal2 hold temp values.
+//            %r_regNdx1 points to b[i].
+//            %r_regNdx2 points to destination[i] on entry.
+//
+label_and_b:                                               //
+   add %r_regNdx1 < %r_zero, %r_numB                       // prepare source (r_numB[0]) to and with.
+   add %r_regCheck1 < %r_gcdWidth, %r_one                  // Set count of rounds.
+   next %ip, %r_one                                        //
+--- // 47
+label_and_b_while:
+//  while (%r_regCheck1 - 1 > 0)
+      //
+      // Loop condition check.
+      //
+      add %r_zero < %r_zero, %r_zero                       // Dummy add.
+      add %r_regCheck1 < %r_regCheck1, %r_minusone         // decrement number of rounds.
+      mux %r_regVal1 < %zero, %r_two, %r_one               // zero is set while condition is true (last reg op is assigned to %r_regVal1).      
+      next %ip, %r_regVal1                                 // Branch to next statement. 
+--- // 48
+      return
+--- // 49
+      loadreg %r_regVal1, %r_regNdx1                       // %r_regVal1 contains the value stored in b[i].
+      next %ip, %r_one                                     //
+--- // 50
+      loadreg %r_regVal2, %r_regNdx2                       // %r_regVal2 contains the value stored in dest[i].
+      and %r_regVal2 < %r_regVal2, %r_regVal1              // and regs.
+      storereg %r_regNdx2, %r_regVal2                      // Store the value into dest[i].
+      next %ip, %r_one                                     //
+--- // 51
+      add %r_regNdx1 < %r_regNdx1, %r_one                  // Advance data pointers.
+      add %r_regNdx2 < %r_regNdx2, %r_one                  //
+      next %r_zero, %r_and_b_while                         // Continue looping.
+--- // 52
+
+
+// ====================================================================
+//          9) copy num subroutine.
+// ====================================================================
+// Regs used: %r_gcdWidth holds number of iterations.
+//            %r_regCheck1 checks the loop condition.
+//            %r_regVal1 holds temp values.
+//            %r_regNdx1 points to source[i] on entry.
+//            %r_regNdx2 points to destination[i] on entry.
+//
+label_copy_num:                                            // Copy source[] regs to destination[] regs.
+   add %r_regCheck1 < %r_gcdWidth, %r_one                  // Set count of rounds.
+   next %ip, %r_one                                        //
+--- // 53
+label_copy_num_while:
+//  while (%r_regCheck1 - 1 > 0)
+      //
+      // Loop condition check.
+      //
+      add %r_zero < %r_zero, %r_zero                       // Dummy add.
+      add %r_regCheck1 < %r_regCheck1, %r_minusone         // decrement number of rounds.
+      mux %r_regVal1 < %zero, %r_two, %r_one               // zero is set while condition is true (last reg op is assigned to %r_regVal1).      
+      next %ip, %r_regVal1                                 // Branch to next statement. 
+--- // 54
+      return
+--- // 55
+      loadreg %r_regVal1, %r_regNdx1                       // %r_regVal1 contains the value stored in source[i].
+      storereg %r_regNdx2, %r_regVal1                      // Store the value into dest[i].
+      next %ip, %r_one                                     //
+--- // 56
+      add %r_regNdx1 < %r_regNdx1, %r_one                  // Advance data pointers.
+      add %r_regNdx2 < %r_regNdx2, %r_one                  //
+      next %r_zero, %r_copy_num_while                      // Continue looping.
+--- // 57
+
+
+// ====================================================================
+//          10) init_u subroutine.
+// ====================================================================
+// Regs used: %r_gcdWidth holds number of iterations.
+//            %r_regCheck1 checks the loop condition.
+//            %r_regVal1 hold temp values.
+//            %r_regNdx1 points to u[i].
+//
+label_init_u:                                              // Set u[0]=1 and zero the rest.
+   add %r_regNdx1 < %r_zero, %r_resultU                    // address of resultU[0].
+   add %r_regCheck1 < %r_gcdWidth, %r_one                  // Set count of rounds.
+   next %ip, %r_one                                        //
+--- // 58
+//  while (%r_regCheck1 - 1 > 0)
+      //
+      // Loop condition check.
+      //
+      add %r_zero < %r_zero, %r_zero                       // Dummy add.
+      add %r_regCheck1 < %r_regCheck1, %r_minusone         // decrement number of rounds.
+      mux %r_regVal1 < %zero, %r_two, %r_one               // zero is set while condition is true (last reg op is assigned to %r_regVal1).      
+      next %ip, %r_regVal1                                 // Branch to next statement. 
+--- // 59
+      add %r[resultU] < %r_zero, %r_one                    // Set the u[0] element to 1 on return.
+      return
+--- // 60
+      add %r_regVal1 < %r_init_u, %r_one                   // Set %r_regVal1 to where the while starts.
+      storereg %r_regNdx1, %r_zero                         // Store zero into u[r_regNdx1].
+      next %ip, %r_one                                     //      
+--- // 61
+      //
+      // Advance for counter and jump accordingly.
+      // 
+      add %r_regNdx1 < %r_regNdx1, %r_one                  // inc data pointer.
+      next %r_zero, %r_regVal1                             // Set IP to where the while starts.         
+--- // 62
+
+
+// ====================================================================
+//          11) init_v subroutine.
+// ====================================================================
+// Regs used: %r_gcdWidth holds number of iterations.
+//            %r_regCheck1 checks the loop condition.
+//            %r_regVal1 holds temp values.
+//            %r_regNdx1 points to v[i].
+//
+label_init_v:                                              // Zero all regs.
+   add %r_regNdx1 < %r_zero, %r_resultV                    // resultV[0].
+   add %r_regCheck1 < %r_gcdWidth, %r_one                  // Set count of rounds.
+   next %ip, %r_one                                        //
+--- // 63
+//  while (%r_regCheck1 - 1 > 0)
+      //
+      // Loop condition check.
+      //
+      add %r_zero < %r_zero, %r_zero                       // Dummy add.
+      add %r_regCheck1 < %r_regCheck1, %r_minusone         // decrement number of rounds.
+      mux %r_regVal1 < %zero, %r_two, %r_one               // zero is set while condition is true (last reg op is assigned to %r_regVal1).      
+      next %ip, %r_regVal1                                 // Branch to next statement. 
+--- // 64
+      return
+--- // 65
+      add %r_regVal1 < %r_init_v, %r_one                   // Set %r_regVal1 to where the while starts.
+      storereg %r_regNdx1, %r_zero                         // Store zero into v[i].
+      next %ip, %r_one                                     //      
+--- // 66
+      //
+      // Advance for counter and jump accordingly.
+      // 
+      add %r_regNdx1 < %r_regNdx1, %r_one                  // inc data pointer.
+      next %r_zero, %r_regVal1                             // Set IP to where the while starts.         
+--- // 68
+
+
+// ====================================================================
+//          12) big_add subroutine (dest = dest + src).
+// ====================================================================
+// Regs used: %r_gcdWidth holds number of iterations.
+//            %r_regCheck1 checks the loop condition.
+//            %r_regVal1, %r_regVal2 hold temp values.
+//            %r_regNdx1 points to source[i] on entry.
+//            %r_regNdx2 points to destination[i] on entry.
+//            %r_regNdx3 points to destination[i+1] for the cary handler.
+//
+label_big_add:
+   add %r_regCheck1 < %r_gcdWidth, %r_one                  // Set count of rounds.
+   next %ip, %r_one                                        //
+--- // 68
+label_big_add_while:
+//  while (%r_regCheck1 - 1 > 0)
+      //
+      // Loop condition check.
+      //
+      add %r_zero < %r_zero, %r_zero                       // Dummy add.
+      loadreg %r_regVal1, %r_regNdx1                       // %r_regVal1 contains the value stored in source[i].
+      add %r_regCheck1 < %r_regCheck1, %r_minusone         // decrement number of rounds.
+      mux %r_regVal2 < %zero, %r_two, %r_one               // zero is set while condition is true (last reg op is assigned to %r_regVal2).      
+      next %ip, %r_regVal2                                 // Branch to next statement. 
+--- // 69
+      return
+--- // 70
+      add %r_regNdx3 < %r_regNdx2, %r_one                  // prepare %r_regNdx3 for the carry routine.
+      loadreg %r_regVal2, %r_regNdx2                       // %r_regVal2 contains the value stored in dest[i].
+      add %r_regVal2 < %r_regVal1, %r_regVal2
+      storereg %r_regNdx2, %r_regVal2                      // Store add result in dest[i].
+      //
+      // If carry is set jump to propagate carry.
+      //
+      mux %r_regVal1 < %carry, %r_big_add_next, %r_big_add_carry
+	    next %r_zero, %r_regVal1                             // Branch to next statement.
+--- // 71
+label_big_add_carry:
+// If not at the MS word: (%r_regCheck1 - %r_one = 0)
+      add %r_regVal1 < %r_regCheck1, %r_zero               //
+      add %r_regVal1 < %r_regVal1, %r_minusone             // %r_regVal1 = %r_regCheck1 - 1.
+      // check the zero flag for doing the adjacent word.
+      mux %r_regVal1 < %zero, %r_carry_handler, %r_big_add_next
+      next %r_zero, %r_regVal1                                 //
+--- // 72
+label_big_add_next:      
+      add %r_regNdx1 < %r_regNdx1, %r_one                  // Advance data pointers.
+      add %r_regNdx2 < %r_regNdx2, %r_one                  //
+      next %r_zero, %r_big_add_while                       // Continue looping.
+--- // 73
+
+
+// ====================================================================
+//          12-a) big_add subroutine carry propagation handler.
+// ====================================================================
+// Regs used: %r_big_add_next is the return address.
+//            %r_shiftBase holds jump instructions.
+//            %r_regNdx3 holds the index of the word next to the word that caused the carry.
+//            %r_regVal1 hold the %r_regCheck1 value of the updated (next) word.
+//            %r_regVal2 hold2 temp values.
+//
+label_carry_handler:
+      add %r_shiftBase < %r_carry_handler, %r_one          //
+      loadreg %r_regVal2, %r_regNdx3                       // load word to update.		
+      add %r_regVal2 < %r_regVal2, %r_one                  // Increment next word.
+      storereg %r_regNdx3, %r_regVal2                      // Store the updated value.
+      //
+      // If carry is set continue to next word, else jump to the return command.
+      //
+      mux %r_regVal2 < %carry, %r_big_add_next, %r_shiftBase
+      next %r_zero, %r_regVal2                             // Branch to next statement.
+--- // 74
+// If not at the MS word: (%r_regVal1 - %r_one = 0)
+      add %r_regNdx3 < %r_regNdx3, %r_one                  // Increment index to next word. 
+      add %r_regVal1 < %r_regVal1, %r_minusone             // boundary check for next word.
+      // check the zero flag for doing the adjacent word.
+      mux %r_regVal2 < %zero, %r_carry_handler, %r_big_add_next
+      next %r_zero, %r_regVal2                             // Branch to next statement.
+--- // 75

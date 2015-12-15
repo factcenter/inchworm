@@ -1,0 +1,1130 @@
+
+// AES IMPLEMENTATION:  Inchworm.
+
+.header
+wordsize: 16           	// Note: wordsize cannot be smaller than any of the pointer sizes
+regptrsize: 10          // 1024 registers, (Can't use less bits - 507 regs are used for data storage).
+romptrsize: 9           // Space for storing 512 instructions.
+ramptrsize: 0
+instruction: zero xor xori add rol and loadreg storereg  out halt mux *next 
+.const
+    minus_four = -4
+    minus_ten = -10
+    reg_space = 100     // %r0 -> %r99
+    text = reg_space
+    rcon = text + 2 * 16
+    sbox = rcon + 11
+    state = sbox + 256    
+    roundKey = state + 16
+    tables_end = roundKey + 176
+
+.data
+//
+// REGISTERS HOLDING FIXED VALUES (%r0 -> %r16).
+//      r0 r1 r2 r3 r4 r5 r6 r7  r8  r9 r10  r11 r12 r13 r14 r15 r16
+%r[0] = 0, 1, 2, 3, 4, 5, 6, 7,  8,  9, 10,  11, 12, 13, 14, 15  0xFF
+
+//
+// GENERAL PURPOSE REGISTERS SPACE (%r17 -> %r98).
+//
+
+retAddr:
+%r[reg_space - 1] = 0
+
+
+// text: unsigned char temp[16 * 2], = "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+// ABCD         EFGH            IJKL           MNOP
+// QRST         UVWX            YZ12           3456
+text:
+%r[text] = 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80
+           81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 49, 50, 51, 52, 53, 54
+
+
+//
+// rcon: new byte[11]
+//
+rcon:
+%r[rcon] = 0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36
+
+//
+// sbox: new byte[256]
+// 0    1     2     3     4     5     6     7     8     9     A     B     C     D     E     F
+sbox:
+%r[sbox] = 
+0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76 // 0
+0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0 // 1
+0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15 // 2
+0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75 // 3
+0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84 // 4
+0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf // 5
+0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8 // 6
+0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2 // 7
+0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73 // 8
+0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb // 9
+0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79 // A
+0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08 // B
+0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a // C
+0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e // D
+0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf // E
+0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16 // F
+
+//
+//          128 bit(10 rounds)           192 bit(12)         256 bit(14)
+// state: 16 byte (4 * 4 array),        24 byte (4 * 6),    32 byte (4 * 8)
+state:
+%r[state] = 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+
+// 
+// roundKey: 44 words - 176 byte values,   52 words - 208,     60 words - 240
+//       (First 4*4 bytes are the original key = "Default128bitkey")
+//
+roundKey:
+%r[roundKey] = 0x44, 0x65, 0x66, 0x61, 0x75, 0x6C, 0x74, 0x31, 0x32, 0x38, 0x62, 0x69, 0x74, 0x6B, 0x65, 0x79
+
+
+
+
+%r[tables_end] = 0
+
+
+
+.code
+
+// ====================================================================
+//          1) init: 'call' the expand-key routine.
+// ====================================================================  
+    zero %r17  
+    xori %r17, ExpandKey            // %r17 now points to ExpandKey
+    next %r0, %r17                  // Set IP to ExpandKey.
+--- //  0
+label_init_for1:
+    zero %r17                       // Reset main for counter.
+    xor %ctrl < %ctrl, %ctrl        // Reset conrtol reg.
+    next %ip, %r1                   // Advance to next statement.
+--- //  0
+     
+// ====================================================================
+//         DEBUG: end program after ExpandKey returns.
+// ====================================================================   
+//    zero %ctrl
+//    xori %ctrl < 0xFFFF             // load ctrl-reg with the stop condition value.
+//    halt
+//    next %ip, %r1                   // Advance to next statement  
+//--- //  3
+        
+label_for1:
+
+// ====================================================================
+//         2) 128 bits block cipher loop:
+// ====================================================================  
+
+//   We are testing 2 block of 128 bits each.
+//   for (%r17 = 0 ; %r17 < %r2; %r17++)   
+        //
+        // Loop condition check.
+        //
+        zero %r19                       // Copy %r17 to %r19
+        xor %r19 < %r19, %r17           //
+        xori %r19 < 0xFFFF              // 0xFFFFFFFF breaks the assembly...
+        add %r19 < %r19, %r2            // 2 blocks.
+        mux %r19 < %carry, %r1, %r2     // carry is set while condition is true (last reg op is assigned to %r19).
+        next %ip, %r19                  // Set IP. 
+--- //  2
+        zero %r19
+        xori %r19 < label_end_main_for
+        next %r0, %r19                  // Exit the main for loop by setting IP to label_end_main_for.
+--- //  3
+
+        //
+        // Copy current block to the state matrix.
+        //
+        zero %retAddr                   // ret label_call_ark
+        xori %retAddr < label_call_ark  // %r[retAddr] now points to label_call_ark
+        next %ip, %r1                   // Set IP to next statement.
+--- //  4
+        zero %r19  
+        xori %r19 < CopyBlock           // %r19 now points to CopyBlock
+        next %r0, %r19                  // Set IP to CopyBlock. 
+--- //  5
+ 
+        //
+        // AddRoundKey - Prepare ret address (label_init_for2) in %r[retAddr] and call add-round-key.
+        //
+label_call_ark:        
+        zero %retAddr                   // ret label_init_for2
+        xor %r20 < %r20, %r20           // Zero rounds-counter for AddRoundKey (same as zero %r20).
+        xori %retAddr < label_init_for2 // %r[retAddr] now points to label_init_for2
+        next %ip, %r1                   // Set IP to next statement.
+--- //  6
+        zero %r19  
+        xori %r19 < AddRoundKey         // %r19 now points to AddRoundKey
+        next %r0, %r19                  // Set IP to AddRoundKey. 
+--- //  7
+label_init_for2:
+        add %r20, %r20, %r1             // Init round-counter to 1.
+        next %ip, %r1                   // Advance to next statement.
+--- //  8
+
+
+// ====================================================================
+//         3) 128 bits key 10 rounds loop:
+// ====================================================================                 
+label_for2:    
+//------for-each round in num-rounds do{
+//      for (r20 = 1 ; %r20 < r11; r20++)
+            //
+            // Loop condition check.
+            //
+            zero %r19                       // Copy %r20 to %r19
+            xor %r19 < %r19, %r20           //
+            xori %r19 < 0xFFFF              // 0xFFFFFFFF breaks the assembly...
+            add %r19 < %r19, %r11 
+            mux %r19 < %carry, %r1, %r2     // carry is set while condition is true (last reg op is assigned to %r19).
+            next %ip, %r19                  // Set IP. 
+--- //  9
+            zero %r19
+            xori %r19 < label_end_inner_for
+            next %r0, %r19                  // Exit the inner for loop by setting IP to label_end_inner_for.
+--- //  10
+
+            //
+            // SubstituteBytes - Prepare ret address (label_sr) in %r[retAddr] and call substitute-bytes.
+            //
+
+            zero %retAddr                   // ret label_sr
+            xori %retAddr < label_sr        // %r[retAddr] now points to label_sr
+            next %ip, %r1                   // Set IP to next statement.
+--- //  11
+
+            // substitute-bytes
+            zero %r19  
+            xori %r19 < SubstituteBytes     // %r19 now points to SubstituteBytes
+            next %r0, %r19                  // Set IP to SubstituteBytes.  
+--- //  12
+                  
+label_sr:  
+
+            //
+            // ShiftRows - Prepare ret address (label_sr) in %r[retAddr] and call shift-rows.
+            //
+
+            zero %retAddr                   // ret label_mc
+            xori %retAddr < label_mc        // %r[retAddr] now points to label_mc
+            next %ip, %r1                   // Set IP to next statement.
+--- //  13
+            // shift-rows
+            zero %r19  
+            xori %r19 < ShiftRows           // %r19 now points to ShiftRows
+            next %r0, %r19                  // Set IP to ShiftRows.         
+--- //  14
+label_mc:        
+
+            //
+            // MixColumns - Prepare ret address (label_ark) in %r[retAddr] and call mix-columns.
+            //
+            zero %r19                       // MixColumns shouldn't be done the LAST round (%r20 = 10)
+            xori %r19 < minus_ten           // %r19 = -10
+            add %r19 < %r19, %r20 
+            mux %r19 < %zero, %r1, %r3      // zero is set if %r20 = 10 (last reg op is assigned to %r19).
+            next %ip, %r19                  // Set IP. 
+--- //  15
+            zero %retAddr                   // ret label_ark
+            xori %retAddr < label_ark       // %r[retAddr] now points to label_ark
+            next %ip, %r1                   // Set IP to next statement.
+--- //  16
+            // mix-columns (not in last round)
+            zero %r19  
+            xori %r19 < MixColumns          // %r19 now points to MixColumns
+            next %r0, %r19                  // Set IP to MixColumns.
+--- //  17
+label_ark:        
+           
+            //
+            // AddRoundKey - Prepare ret address (advance_for2_counter) in %r[retAddr] and call add-round-key.
+            //
+            
+            zero %retAddr                   // ret advance_for2_counter
+            xori %retAddr < advance_for2_counter // %r[retAddr] now points to advance_for2_counter
+            next %ip, %r1                   // Set IP to next statement.
+--- //  18
+        
+            zero %r19  
+            xori %r19 < AddRoundKey         // %r19 now points to AddRoundKey
+            next %r0, %r19                  // Set IP to AddRoundKey. 
+--- //  19
+   
+advance_for2_counter:
+            //
+            // Advance counter of for2 and jump accordingly.
+            // 
+            zero %r19  
+            xori %r19 < label_for2          // %r19 now points to label_for2
+            add %r20 < %r20, %r1            // inc loop counter (%r20)
+            next %r0, %r19                  // Set IP to label_for2.         
+--- //  20
+
+label_end_inner_for:   
+     
+//------}
+
+// ====================================================================
+//         4) save-ciphered-block.
+// ====================================================================   
+            
+        //
+        // SaveBlock - Prepare ret address (label_sr) in %r[retAddr] and call save_block.
+        //
+        
+        zero %retAddr                   // ret advance_for1_counter
+        xori %retAddr < advance_for1_counter   // %r[retAddr] now points to advance_for1_counter
+        next %ip, %r1                   // Set IP to next statement.
+--- //  21
+        // save-block
+        zero %r19  
+        xori %r19 < SaveBlock           // %r19 now points to SaveBlock
+        next %r0, %r19                  // Set IP to SaveBlock.         
+--- //  22
+
+advance_for1_counter:     
+        //
+        // Advance counter of for1 and jump accordingly.
+        // 
+        zero %r19  
+        xori %r19 < label_for1          // %r19 now points to label_for1
+        add %r17 < %r17, %r1            // inc loop counter (%r17)
+        next %r0, %r19                  // Set IP to label_for1.         
+--- //  23
+
+label_end_main_for:
+    
+//--}
+    
+// ====================================================================
+//         5) end program.
+// ====================================================================   
+    zero %ctrl
+    xori %ctrl < 0xFFFF             // load ctrl-reg with the stop condition value.
+    halt
+    next %ip, %r1                   // Advance to next statement  
+--- //  24
+
+// ====================================================================
+//          Routines - to be called / return using code labels
+// ====================================================================
+
+// ====================================================================
+ExpandKey:
+   //
+   // This routine produces 44 dwords (4 * (rounds +1)). The dwords are used in each 
+   // round to encrypt the states. The first 4 dwords (4*4 bytes) are the original AES key.
+   //
+   // Regs used: %r21 is the loop counter, %r23 holds the loop max value.
+   //            %r22 used for checking the loop condition and do jumps.
+   //            %r24 till %r%27 hold the previos dword (4 bytes, in temp[0 to 3])
+   //            %r28 stores the bias, %r29 points to roundKey[0].
+   //
+   zero %r21                       // Init for counter and limit.
+   xor %r23 < %r23, %r23           // %r23 = 0
+   xori %r23, 44                   // %r23 = 44
+   add %r21 < %r21, %r4            // %r21 = 4
+   next %ip, %r1                   // Advance to next statement.   
+--- //  25
+   
+label_expandkey_for:  
+//  for (%r21 = 0 ; %r21 < %r23; %r21++)
+      //
+      // Loop condition check.
+      //
+      zero %r22                       //
+      xor %r22 < %r22, %r21           // Load %r22 with current loop value and negate.
+      xori %r22 < 0xFFFF              //
+      add %r22 < %r22, %r23
+      mux %r22 < %carry, %r1, %r2     // carry is set while condition is true (last reg op (%r2) is assigned to %r22).
+      next %ip, %r22                  // Set IP. 
+--- //
+      zero %r19                       // ret label_init_for1
+      xori %r19 < label_init_for1     // %r19 now points to label_init_for1
+      next %r0, %r19                  // Set IP to label_init_for1.
+--- //
+      zero %r28                       // Store -1 into %r28.
+      xori %r28 < 0xFFFF              // 
+      add %r28 < %r21, %r28           // %r28 hold previos round counter.
+      rol %r28 < %r28, %r2            // %r28 = 4 * (%r21 - 1)
+      next %ip, %r1                   // Advance to next statement.        
+--- //
+      //
+      // Store values of prev round (temp[0 to 3]) in temp registers.
+      //
+      zero %r29                       // 
+      xori %r29 < roundKey            // %r29 points to roundKey[0].  
+      add %r28 < %r28, %r29           // %r28 points to roundKey[4 * (%r21 - 1)]
+      loadreg %r24, %r28              // %r24 contains the value stored in roundKey[4 * (%r21 - 1)].
+      next %ip, %r1                   // Advance to next statement.        
+--- //      
+      add %r28 < %r28, %r1            // %r28 points to roundKey[4 * (%r21 - 1) + 1]
+      loadreg %r25, %r28              // %r25 contains the value stored in (roundKey[4 * (%r21 - 1) + 1]).
+      next %ip, %r1                   // Advance to next statement.
+--- //      
+      add %r28 < %r28, %r1            // %r28 points to roundKey[4 * (%r21 - 1) + 2]
+      loadreg %r26, %r28              // %r26 contains the value stored in (roundKey[4 * (%r21 - 1) + 2]).
+      next %ip, %r1                   // Advance to next statement.
+--- //   
+      add %r28 < %r28, %r1            // %r28 points to roundKey[4 * (%r21 - 1) + 2]
+      loadreg %r27, %r28              // %r27 contains the value stored in (roundKey[4 * (%r21 - 1) + 3]).
+      next %ip, %r1                   // Advance to next statement.
+--- //        
+	  //
+  	  // if (i % Nk == 0) do: RotateWord, SubWord
+      //
+      zero %r31                       // Prepare for testing the if condition.
+      xori %r31, label_expandkey_assign   // = 47
+      and %r30 < %r21, %r3            // (%r21 % 4 == 0) :: (%r21 and 3 == 0)
+      next %ip, %r1                   // Advance to next statement.
+--- //      32
+      add %r30 < %r30, %r0            // zf will be set if %r30 = 0.
+      mux %r30 < %zero, %r1, %r2      // zero is set if condition is true (last reg op (%r2) is assigned to %r30).
+      next %ip, %r30                  // Advance to next statement or the following one.
+--- //      
+      next %r0, %r31                  // condition is false - skip the 'if' block    
+--- //
+      zero %r30                       // === Rotate words.
+      xor %r30 < %r30, %r24           // Store %r24 (=temp[0]) in %r30.
+      next %ip, %r1                   // Advance to next statement.      
+--- //
+      zero %r24                       //
+      xor %r24 < %r24, %r25           // Store %r25 (=temp[1]) in %r24.
+      next %ip, %r1                   // Advance to next statement.      
+--- //
+      zero %r25                       //
+      xor %r25 < %r25, %r26           // Store %r26 (=temp[2]) in %r25.
+      next %ip, %r1                   // Advance to next statement.      
+--- //
+      zero %r26                       //
+      xor %r26 < %r26, %r27           // Store %r27 (=temp[3]) in %r26.
+      next %ip, %r1                   // Advance to next statement.      
+--- //
+      zero %r27                       //
+      xor %r27 < %r27, %r30           // Store %r30 (=temp[0]) in %r27.
+      next %ip, %r1                   // Advance to next statement.      
+--- //
+      zero %r30                       // === Substitute words.
+      xori %r30 < sbox                // %r30 now 'points' to sbox[0].
+      add %r30 < %r30, %r24           // %r30 points to sbox[j (= %r24)].
+      loadreg %r24, %r30              // %r24 contains the value stored in (sbox[j (= %r24)]).
+      next %ip, %r1                   // Advance to next statement.      
+--- //
+      zero %r30                       //
+      xori %r30 < sbox                // %r30 now 'points' to sbox[0].
+      add %r30 < %r30, %r25           // %r30 points to sbox[j (= %r25)].
+      loadreg %r25, %r30              // %r25 contains the value stored in (sbox[j (= %r25)]).
+      next %ip, %r1                   // Advance to next statement.      
+--- //
+      zero %r30                       //
+      xori %r30 < sbox                // %r30 now 'points' to sbox[0].
+      add %r30 < %r30, %r26           // %r30 points to sbox[j (= %r26)].
+      loadreg %r26, %r30              // %r26 contains the value stored in (sbox[j (= %r26)]).
+      next %ip, %r1                   // Advance to next statement.      
+--- //
+      zero %r30                       //
+      xori %r30 < sbox                // %r30 now 'points' to sbox[0].
+      add %r30 < %r30, %r27           // %r30 points to sbox[j (= %r27)].
+      loadreg %r27, %r30              // %r27 contains the value stored in (sbox[j (= %r27)]).
+      next %ip, %r1                   // Advance to next statement.      
+--- //
+      zero %r31                       // temp[0] = temp[0] ^ rcon[i / 4]
+      xor %r30, %r30, %r30            // %r30 = 0.      
+      xori %r31 < rcon                // %r31 now 'points' to rcon[0].
+      add %r30 < %r30, %r21           // %r30 = loop counter (%r21)          // counter = 4, line 875
+      rol %r30, %r30, %r14            // %r30 = %r21 / 4 (shr 2)
+      next %ip, %r1                   // Advance to next statement.       
+--- //      
+      add %r30 < %r30, %r31           // %r30 points to rcon[%r21 / 4]
+      loadreg %r30, %r30              // %r30 contains the value stored in (rcon[j (%r21 / 4)]).
+      next %ip, %r1                   // Advance to next statement.       
+--- //
+      xor %r24 < %r24, %r30           // %r24 (=temp[0]) = %r24 ^ rcon[%r21 / 4].
+      next %ip, %r1                   // Advance to next statement.       
+--- //
+      //
+      // end if (i % Nk == 0)
+      //
+label_expandkey_assign:			
+      //
+      // Assign the 4 roundKey values.
+      //	
+      zero %r30                       // 
+      xori %r30 < minus_four          // %r30 = -4.  
+      add %r30 < %r21, %r30           // %r30 = (%r21 - 4).
+      rol %r30 < %r30, %r2            // %r30 = 4 * (%r21 - 4)
+      next %ip, %r1                   // Next statement.
+--- //
+      zero %r28                       //
+      add %r28 < %r21, %r28           // %r28 hold round counter.
+      rol %r28 < %r28, %r2            // %r28 = 4 * %r21
+      next %ip, %r1                   // Advance to next statement.        
+--- //
+      add %r28 < %r28, %r29           // %r28 points to RoundKey[i*4].
+      next %ip, %r1                   // Advance to next statement.        
+--- //
+      add %r30 < %r30, %r29           // %r30 points to RoundKey[(i-4)*4].
+      loadreg %r31, %r30              // %r31 = roundKey[(%r21 - 4) * 4].
+      next %ip, %r1                   // Advance to next statement.        
+--- //
+      xor %r24 < %r24, %r31           // %r24 = temp[0] ^ roundKey[(%r21 - 4) * 4].
+      add %r30 < %r30, %r1            // inc %r30
+      loadreg %r31, %r30              // %r31 = roundKey[(%r21 - 4) * 4 + 1].
+      next %ip, %r1                   // Advance to next statement.        
+--- //
+      xor %r25 < %r25, %r31           // %r25 = temp[1] ^ roundKey[(%r21 - 4) * 4 + 1].
+      add %r30 < %r30, %r1            // inc %r30
+      loadreg %r31, %r30              // %r31 = roundKey[(%r21 - 4) * 4 + 2].
+      next %ip, %r1                   // Advance to next statement.        
+--- //         
+      xor %r26 < %r26, %r31           // %r26 = temp[2] ^ roundKey[(%r21 - 4) * 4 + 2].
+      add %r30 < %r30, %r1            // inc %r30
+      loadreg %r31, %r30              // %r31 = roundKey[(%r21 - 4) * 4 + 3].
+      next %ip, %r1                   // Advance to next statement.        
+--- // 
+      // ---  RoundKey[i*4 + 0] = RoundKey[(i-4)*4 + 0] ^ temp[0];
+      xor %r27 < %r27, %r31           // %r27 = temp[3] ^ roundKey[(%r21 - 4) * 4 + 3].
+      storereg %r28, %r24             // RoundKey[i*4] = %r24.     
+      next %ip, %r1                   // Advance to next statement.        
+--- //
+      // ---  RoundKey[i*4 + 1] = RoundKey[(i-4)*4 + 1] ^ temp[1];
+      add %r28 < %r28, %r1            // inc %r28
+      storereg %r28, %r25             // RoundKey[i*4 + 1] = %r25.     
+      next %ip, %r1                   // Advance to next statement.        
+--- //
+      // ---  RoundKey[i*4 + 2] = RoundKey[(i-4)*4 + 2] ^ temp[2];      
+      add %r28 < %r28, %r1            // inc %r28
+      storereg %r28, %r26             // RoundKey[i*4 + 2] = %r26.     
+      next %ip, %r1                   // Advance to next statement.        
+--- // 
+      // ---  RoundKey[i*4 + 3] = RoundKey[(i-4)*4 + 3] ^ temp[3]; 
+      add %r28 < %r28, %r1            // inc %r28
+      storereg %r28, %r27             // RoundKey[i*4 + 3] = %r27.     
+      next %ip, %r1                   // Advance to next statement.        
+--- //        
+      //
+      // Advance for counter and jump accordingly.
+      // 
+      zero %r22  
+      xori %r22 < label_expandkey_for // %r22 now points to label_expandkey_for (= 25)
+      add %r21 < %r21, %r1            // inc loop counter (%r21)
+      next %r0, %r22                  // Set IP to label_expandkey_for.         
+--- //
+
+
+// ====================================================================
+CopyBlock:
+   //
+   // Copy the values in current block to the state matrix.
+   //
+   // for(i=0;i=<15;i++) {
+   //	 state[i] = text[%r17 * 16 + i];
+   //  }
+   // Regs used: %r21 is the loop counter, %r22 checks the loop condition
+   //            %r23 points to state[i], %r24 points to text[i]
+   //
+   zero %r21                       // Reset for counter.
+   xor %r22 < %r22, %r22           // Zero %r22.
+   add %r22 < %r22, %r17           // Add block number to %r22.
+   rol %r22 < %r22, %r4            // text bias = block_number * 16.
+   next %ip, %r1                   // Advance to next statement.   
+--- //  60
+   zero %r24                       // Zero %r24
+   xori %r24, text                 // %r24 'points' to text[0].
+   add %r24 < %r24, %r22           // %r24 'points' to text[block_number * 16].
+   next %ip, %r1                   // Advance to next statement.   
+--- //
+   
+label_copyblock_for:  
+//  for (%r21 = 0 ; %r21 =< %r15; %r21++)
+      //
+      // Loop condition check.
+      //
+      zero %r22                       //
+      xor %r22 < %r22, %r15           // Load %r22 with loop stop value and negate.
+      xori %r22 < 0xFFFF              //
+      add %r22 < %r22, %r21 
+      mux %r22 < %carry, %r2, %r1     // carry is set while condition is false (last reg op (%r1) is assigned to %r22).
+      next %ip, %r22                  // Set IP. 
+--- //
+      next %r0, %retAddr              // For loop ended - Set IP to the pre-prepared ret address in %r[retAddr].
+--- //   
+      add %r25 < %r24, %r21           // %r25 'points' to text[block_number * 16 + i].
+      loadreg %r25, %r25              // %r25 contains the value stored in (state[i]).
+      next %ip, %r1                   // Next statement.
+--- //     64
+      zero %r23                       // Get value of state[i(= %r21)].
+      xori %r23 < state               // %r23 now 'points' to state[0].
+      add %r23 < %r23, %r21           // %r23 points to state[i].
+      storereg %r23, %r25             // %r25 contains the value to be stored in (state[i]).
+      next %ip, %r1                   // Next statement.
+--- //     65
+      //
+      // Advance for counter and jump accordingly.
+      // 
+      zero %r22  
+      xori %r22 < label_copyblock_for // %r22 now points to label_copyblock_for
+      add %r21 < %r21, %r1            // inc loop counter (%r17)
+      next %r0, %r22                  // Set IP to label_sbytes_for.         
+--- // 
+
+
+// ====================================================================
+SaveBlock:
+   //
+   // Outputs the values in the state matrix.
+   //
+   // for(i=0;i=<15;i++) {
+   //	 output state[i];
+   //  }
+   // Regs used: %r21 is the loop counter, %r22 checks the loop condition
+   //            %r23 points to state[i].
+   //
+   zero %r21                       // Reset for counter.
+   next %ip, %r1                   // Advance to next statement.   
+--- //  67
+   
+label_saveblock_for:  
+//  for (%r21 = 0 ; %r21 =< %r15; %r21++)
+      //
+      // Loop condition check.
+      //
+      zero %r22                       //
+      xor %r22 < %r22, %r15           // Load %r22 with loop stop value and negate.
+      xori %r22 < 0xFFFF              //
+      add %r22 < %r22, %r21 
+      mux %r22 < %carry, %r2, %r1     // carry is set while condition is false (last reg op (%r1) is assigned to %r22).
+      next %ip, %r22                  // Set IP. 
+--- //
+      next %r0, %retAddr              // For loop ended - Set IP to the pre-prepared ret address in %r[retAddr].
+--- //   
+      zero %r23                       // Get value of state[i(= %r21)].
+      xori %r23 < state               // %r23 now 'points' to state[0].
+      add %r23 < %r23, %r21           // %r23 points to state[i].
+      loadreg %r25, %r23              // %r25 contains the value stored in (state[i]).
+      next %ip, %r1                   // Next statement.
+--- //  70
+      zero %r[out1]
+      add %r[out1] < %r[out1], %r25   // store current block byte in out register.
+      next %ip, %r1                   // Advance to next statement  
+---  //
+      zero %r[out2]
+      xori %ctrl < 0x01               // load ctrl-reg with the out-stream value.
+      add %r[out2] < %r[out2], %r25   // store current block byte in out register.
+      out                             // RESULT OF AES.
+      next %ip, %r1                   // Advance to next statement  
+---  //
+      //
+      // Advance for counter and jump accordingly.
+      // 
+      zero %r22  
+      xor %ctrl < %ctrl, %ctrl        // Reset conrtol reg.
+      xori %r22 < label_saveblock_for // %r22 now points to label_sbytes_for
+      add %r21 < %r21, %r1            // inc loop counter (%r17)
+      next %r0, %r22                  // Set IP to label_sbytes_for.         
+--- // 
+
+
+// ====================================================================
+SubstituteBytes:
+   //
+   // Substitutes the values in the state matrix with values in an S-box.
+   //
+   // ForAll:i,j state[i,j] <- sbox[state[i,j]] (= %r[sbox + state[i,j]])
+   // for(i=0;i=<15;i++)
+   //  {
+   //	  state[i] = sbox_value(state[i]);
+   //  }
+   //}   
+   // Regs used: %r21 is the loop counter, %r22 checks the loop condition
+   //            %r23 points to state[i], %r24 points to sbox[j],
+   //            %r25 holds sbox value we copy.
+   //
+   zero %r21                       // Reset for counter.
+   next %ip, %r1                   // Advance to next statement.   
+--- //  74
+   
+label_sbytes_for:  
+//  for (%r21 = 0 ; %r21 =< %r15; %r21++)
+      //
+      // Loop condition check.
+      //
+      zero %r22                       //
+      xor %r22 < %r22, %r15           // Load %r22 with loop stop value and negate.
+      xori %r22 < 0xFFFF              //
+      add %r22 < %r22, %r21 
+      mux %r22 < %carry, %r2, %r1     // carry is set while condition is false (last reg op (%r1) is assigned to %r22).
+      next %ip, %r22                  // Set IP. 
+--- //
+      next %r0, %retAddr              // For loop ended - Set IP to the pre-prepared ret address in %r[retAddr].
+--- //   
+      zero %r23                       // Get value of state[i(= %r21)].
+      xori %r23 < state               // %r23 now 'points' to state[0].
+      add %r23 < %r23, %r21           // %r23 points to state[i].
+      loadreg %r25, %r23              // %r25 contains the value stored in (state[i]).
+      next %ip, %r1                   // Next statement.
+--- //  77
+      zero %r24                       // Get value of sbox_value[%r21].
+      xori %r24 < sbox                // %r24 now 'points' to sbox[0].
+      add %r24 < %r24, %r25           // %r24 points to sbox[j (= %r25)].
+      loadreg %r25, %r24              // %r25 contains the value stored in (sbox[j]).
+      storereg %r23, %r25             // Store sbox[j] in state[i].        
+      next %ip, %r1                   // Next statement.
+--- //
+      //
+      // Advance for counter and jump accordingly.
+      // 
+      zero %r22  
+      xori %r22 < label_sbytes_for    // %r22 now points to label_sbytes_for
+      add %r21 < %r21, %r1            // inc loop counter (%r17)
+      next %r0, %r22                  // Set IP to label_sbytes_for.         
+--- //  
+   
+
+// ==================================================================== 
+ShiftRows:
+   //
+   // Cylic left shift.
+   //
+   // row #1: s00, s01, s02, s03  => s00, s01, s02, s03   (No change)
+   // row #2: [s10], s11, s12, s13  => s11, s12, s13, s10   (cyclic-shl 1 position)
+   // row #3: [s20, s21], s22, s23  => s22, s23, s20, s21   (cyclic-shl 2 position)
+   // row #4: [s30, s31, s32], s33  => s33, s30, s31, s32   (cyclic-shl 3 position)
+   //
+   // Regs used: %r21, %r22, %r23 holds the temp value(s) for each row
+   //            %r24 holds the dest reg index, %r25 holds the src reg index.
+   //            %r26 is used for storereg source register.
+   
+   //  loadreg %dest  < %src:   regs[destRegNdx] = regs[srcRegVal].   
+   //  storereg %dest < %src:   regs[destRegVal] = srcRegVal 
+
+   // =========================================================================   
+   // row #2: [s1] <- s5, s5 <- s9, s9 <- s13, s13 <- s1 
+   zero %r24                       // Save s[1].
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r1            // %r24 points to state[1].
+   loadreg %r21, %r24              // %r21 contains the current row temp value (s[1]).
+   next %ip, %r1                   // Next statement.
+--- //  80
+   zero %r25                       // [s1] <- s5.
+   xori %r25 < state               // %r25 now 'points' to state[0].
+   add %r25 < %r25, %r5            // %r25 points to state[5].
+   loadreg %r26 < %r25             // %r26 now contains state[5]
+   storereg %r24, %r26             // state[1] contains the value of state[5].
+   next %ip, %r1                   // Next statement.
+--- //      
+   zero %r24                       // s5 <- s9
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r5            // %r24 points to state[5].
+   next %ip, %r1                   // Next statement.
+--- // 
+   zero %r25                       //
+   xori %r25 < state               // %r25 now 'points' to state[0].
+   add %r25 < %r25, %r9            // %r25 points to state[9].
+   loadreg %r26 < %r25             // %r26 now contains state[9]
+   storereg %r24, %r26             // state[5] contains the value of state[9].
+   next %ip, %r1                   // Next statement.
+--- //
+   zero %r24                       // s9 <- s13
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r9            // %r24 points to state[9].
+   next %ip, %r1                   // Next statement.
+--- //   
+   zero %r25                       //
+   xori %r25 < state               // %r25 now 'points' to state[0].
+   add %r25 < %r25, %r13           // %r25 points to state[13].
+   loadreg %r26 < %r25             // %r26 now contains state[13]
+   storereg %r24, %r26             // state[9] contains the value of state[13].
+   next %ip, %r1                   // Next statement.
+--- //     
+   zero %r24                       // s13 <- s1
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r13           // %r24 points to state[13].
+   storereg %r24, %r21             // state[13] contains the value of state[1].
+   next %ip, %r1                   // Next statement.
+--- //   
+
+   // =========================================================================
+   // row #3: [s2] <- s10, [s6] <- s14, s10 <- s2, s14 <- s6 
+   zero %r24                       // Save s[2] and s[6] values.
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r2            // %r24 points to state[2].
+   loadreg %r21, %r24              // %r21 contains the current row temp value (s[2]).
+   next %ip, %r1                   // Next statement.
+--- //   
+   add %r24 < %r24, %r4            // %r24 points to state[6].
+   loadreg %r22, %r24              // %r22 contains the current row temp value (s[6]).
+   next %ip, %r1                   // Next statement.
+--- //  
+   zero %r24                       // [s2] <- s10
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r2            // %r24 points to state[2].
+   next %ip, %r1                   // Next statement.
+--- //  
+   zero %r25                       //
+   xori %r25 < state               // %r25 now 'points' to state[0].
+   add %r25 < %r25, %r10           // %r25 points to state[10].
+   loadreg %r26 < %r25             // %r26 now contains state[10]
+   storereg %r24, %r26             // state[2] contains the value of state[10].
+   next %ip, %r1                   // Next statement.
+--- //      
+   zero %r24                       // [s6] <- s14
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r6            // %r24 points to state[6].
+   next %ip, %r1                   // Next statement.
+--- //   
+   zero %r25                       //
+   xori %r25 < state               // %r25 now 'points' to state[0].
+   add %r25 < %r25, %r14           // %r25 points to state[14].
+   loadreg %r26 < %r25             // %r26 now contains state[14]
+   storereg %r24, %r26             // state[6] contains the value of state[14].
+   next %ip, %r1                   // Next statement.
+--- // 
+   zero %r24                       // s10 <- [s2]
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r10           // %r24 points to state[10].
+   storereg %r24, %r21             // state[10] contains the value of state[2].
+   next %ip, %r1                   // Next statement.
+--- //  
+   zero %r24                       // s14 <- [s6]
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r14           // %r24 points to state[14].
+   storereg %r24, %r22             // state[14] contains the value of state[6].
+   next %ip, %r1                   // Next statement.
+--- //  
+
+   // =========================================================================
+   // row #4: [s3] <- s15, [s7] <- s3, [s11] <- s7, s15 <- s11 
+   zero %r24                       // Save s[3], s[7], and s[11] values..
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r3            // %r24 points to state[3].
+   loadreg %r21, %r24              // %r21 contains the current row temp value (s[3]).
+   next %ip, %r1                   // Next statement.
+--- //   
+   add %r24 < %r24, %r4            // %r24 points to state[7].
+   loadreg %r22, %r24              // %r22 contains the current row temp value (s[7]).
+   next %ip, %r1                   // Next statement.
+--- //       
+   add %r24 < %r24, %r4            // %r24 points to state[11].
+   loadreg %r23, %r24              // %r23 contains the current row temp value (s[11]).
+   next %ip, %r1                   // Next statement.
+--- //        
+   zero %r24                       // [s3] <- s15
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r3            // %r24 points to state[3].
+   next %ip, %r1                   // Next statement.
+--- //   
+   zero %r25                       //
+   xori %r25 < state               // %r25 now 'points' to state[0].
+   add %r25 < %r25, %r15           // %r25 points to state[15].
+   loadreg %r26 < %r25             // %r26 now contains state[15]
+   storereg %r24, %r26             // state[3] contains the value of state[15].
+   next %ip, %r1                   // Next statement.
+--- //      
+   zero %r24                       // [s7] <- s3
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r7            // %r24 points to state[7].
+   storereg %r24, %r21             // state[7] contains the value of state[3].
+   next %ip, %r1                   // Next statement.
+--- //   
+   zero %r24                       // [s11] <- s7
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r11           // %r24 points to state[11].
+   storereg %r24, %r22             // state[11] contains the value of state[7].
+   next %ip, %r1                   // Next statement.
+--- //  
+   zero %r24                       // s15 <- s11 
+   xori %r24 < state               // %r24 now 'points' to state[0].
+   add %r24 < %r24, %r15           // %r24 points to state[15].
+   storereg %r24, %r23             // state[15] contains the value of state[11].
+   next %r0, %retAddr              // Set IP to the pre-prepared ret address in %r[retAddr].
+--- //   
+
+
+// ====================================================================
+MixColumns:
+   //
+   // MixColumns mixes the columns of the state matrix
+   // 	int i;
+   // 	unsigned char Tmp,Tm,t;
+   // 	for(i=0;i<4;i++)
+   // 	{	
+   // 		t=state[0][i];
+   // 		Tmp = state[0][i] ^ state[1][i] ^ state[2][i] ^ state[3][i] ;
+   //       Bias:  [0 + %r26]    [1 + %r26]    [2 + %r26]    [3 + %r26]
+   // 		Tm  = state[0][i] ^ state[1][i] ; 
+   //       Tm = xtime(Tm); 
+   //   state[0][i] ^= Tm ^ Tmp ;
+   // 		Tm  = state[1][i] ^ state[2][i] ; 
+   //       Tm = xtime(Tm); 
+   //   state[1][i] ^= Tm ^ Tmp ;
+   // 		Tm  = state[2][i] ^ state[3][i] ; 
+   //       Tm = xtime(Tm); 
+   //   state[2][i] ^= Tm ^ Tmp ;
+   // 		Tm  = state[3][i] ^ t ; 
+   //       Tm = xtime(Tm); 
+   //   state[3][i] ^= Tm ^ Tmp ;
+   // 	}
+   //
+   // Regs used: %r21 is the loop counter, %r22 checks the loop condition
+   //            %r23 holds Tmp, %r24 holds Tm (for Xtime), %r25 holds t (state[0][i]).
+   //            %r26 holds loop bias (4 per column), 
+   //            %r27 points to state[0][i], %r28 points to state[1][i]
+   //            %r29 points to state[2][i], %r30 points to state[3][i] 
+   //            %r31, %r32 for temp values, %r33 for xtime ip.
+   //
+   zero %r21                       // Reset for counter.
+   next %ip, %r1                   // Advance to next statement.   
+--- //  103
+   zero %r26                       // Reset for loop bias.
+   next %ip, %r1                   // Advance to next statement.   
+--- //
+   
+label_mixcols_for:  
+// for (%r21 = 0 ; %r21 < %r4; r21++)
+      //
+      // Loop condition check.
+      //
+      zero %r22                       //
+      xor %r22 < %r22, %r21           // Copy %r21 to %r22 and negate.
+      xori %r22 < 0xFFFF              //
+      add %r22 < %r22, %r4 
+      mux %r22 < %carry, %r1, %r2     // carry is set while condition is true (last reg op is assigned to %r22).
+      next %ip, %r22                  // Set IP. 
+--- //
+      next %r0, %retAddr              // For loop ended - Set IP to the pre-prepared ret address in %r[retAddr].
+--- //   
+        //
+        // state[0][i]          ===============================================
+        //
+      zero %r27                       // Save t (state[0][i]) in %r25.
+      xori %r27 < state               // %r27 now 'points' to state[0][0].
+      add %r27 < %r27, %r26           // %r27 points to state[0][i].
+      loadreg %r25, %r27              // %r25 contains the current column temp value (s[0][i]).
+      next %ip, %r1                   // Next statement.
+--- //  107
+      zero %r28                       // Save Tm (state[0][i] (%r25) ^ state[1][i]) in %r24
+      add %r28 < %r27, %r1            // %r28 points to  state[1][i].
+      loadreg %r24 < %r28             // %r24 now contains state[1][i].
+      next %ip, %r1                   // Next statement.
+--- //
+      zero %r29
+      xor %r24 < %r25, %r24           // Tm is now stored at %r24 (state[0][i] ^ state[1][i]).
+      add %r29 < %r27, %r2            // Prepare for next step: %r29 points to  state[2][i].
+      loadreg %r31 < %r29             // Prepare for next step: %r31 now contains state[2][i].   
+      next %ip, %r1                   // Next statement.
+--- //
+      zero %r30                       // Save Tmp (%r24 ^ state[2][i] (=%r31) ^ state[3][i] (%r30)) in %r23
+      xor %r23 < %r24, %r31           // %r23 = %r24 ^ state[2][i] (%r31)
+      add %r30 < %r27, %r3            // %r30 points to  state[3][i].
+      loadreg %r32 < %r30             // %r32 now contains state[3][i].
+      next %ip, %r1                   // Next statement.
+--- //  110
+      zero %r33                       // %r33 will be used for calling XTime.
+      xor %r23 < %r23, %r32           // %r23 = (%r24 ^ state[2][i] (=%r31)) ^ state[3][i] (=%r32)) in %r23      
+      xori %r33 < XTime               // %r33 points to XTime routine.
+      next %ip, %r1                   // Next statement.
+--- //  111
+      zero %r32                       // Now multiply %r24 (Tm) by {02}
+      xori %r32, label_mixcols_xtime1 // Ret address in %r32.
+      // Calling convention: %r24 holds x value (Tm), %r32 hold ret address, value return via %r24   
+      next %r0, %r33                  // Jump to the XTime routine.
+--- //
+label_mixcols_xtime1:
+      zero %r31                       // state[0][i](%r27) = state[0][i](value in %r25) ^ Tm(value in %r24) ^ Tmp(value in %r23)
+      xor %r31 < %r25, %r24           // %r31 = state[0][i] ^ Tm.
+      next %ip, %r1                   // Next statement.
+--- //  113
+      xor %r31 < %r31, %r23           // %r31 = (state[0][i] ^ Tm) ^ Tmp.
+      storereg %r27, %r31             // %r27 points to state[0][i].
+      next %ip, %r1                   // Next statement.
+--- //  114
+        //
+        // state[1][i]          ===============================================
+        //
+      zero %r31                       // Save state[1][i] in %r31
+      loadreg %r31 < %r28             // %r31 now contains state[1][i].
+      next %ip, %r1                   // Next statement.                 
+--- //
+      zero %r24                       // Save state[2][i] in %r24
+      loadreg %r24 < %r29             // %r24 now contains state[2][i].
+      next %ip, %r1                   // Next statement.                 
+--- //
+      xor %r24 < %r24, %r31           // Tm is now stored at %r24 (state[1][i] ^ state[2][i]).
+      next %ip, %r1                   // Next statement.
+--- //
+      zero %r33                       // %r33 will be used for calling XTime.
+      xor %r31 < %r31, %r23           // %r31 = state[1][i](=%r31) ^ Tmp(=%r23)    
+      xori %r33 < XTime               // %r33 points to XTime routine.
+      next %ip, %r1                   // Next statement.
+--- //   
+      zero %r32                       // Now multiply %r24 (Tm) by {02}
+      xori %r32, label_mixcols_xtime2 // Ret address in %r32.
+      // Calling convention: %r24 holds x value (Tm), %r32 hold ret address, value return via %r24   
+      next %r0, %r33                  // Jump to the XTime routine.
+--- //
+label_mixcols_xtime2:
+      xor %r31 < %r31, %r24           // %r31 = %r31 ^ Tm.
+      storereg %r28, %r31             // %r28 points to state[1][i].
+      next %ip, %r1                   // Next statement.
+--- //  120
+        //
+        // state[2][i]          ===============================================
+        //
+      zero %r31                       // Save state[2][i] in %r31
+      loadreg %r31 < %r29             // %r31 now contains state[2][i].
+      next %ip, %r1                   // Next statement.                 
+--- //
+      zero %r24                       // Save state[3][i] in %r24
+      loadreg %r24 < %r30             // %r24 now contains state[3][i].
+      next %ip, %r1                   // Next statement.                 
+--- //
+      xor %r24 < %r24, %r31           // Tm is now stored at %r24 (state[2][i] ^ state[3][i]).
+      next %ip, %r1                   // Next statement.
+--- //
+      zero %r33                       // %r33 will be used for calling XTime.
+      xor %r31 < %r31, %r23           // %r31 = state[2][i](=%r31) ^ Tmp(=%r23)    
+      xori %r33 < XTime               // %r33 points to XTime routine.
+      next %ip, %r1                   // Next statement.
+--- //   
+      zero %r32                       // Now multiply %r24 (Tm) by {02}
+      xori %r32, label_mixcols_xtime3 // Ret address in %r32.
+      // Calling convention: %r24 holds x value (Tm), %r32 hold ret address, value return via %r24   
+      next %r0, %r33                  // Jump to the XTime routine.
+--- //
+label_mixcols_xtime3:
+      xor %r31 < %r31, %r24           // %r31 = %r31 ^ Tm.
+      storereg %r29, %r31             // %r29 points to state[2][i].
+      next %ip, %r1                   // Next statement.
+--- //  126    
+        //
+        // state[3][i]          ===============================================
+        //
+      zero %r31                       // Save state[3][i] in %r31
+      loadreg %r31 < %r30             // %r31 now contains state[3][i].
+      next %ip, %r1                   // Next statement.                 
+--- //
+      xor %r24 < %r31, %r25           // Tm = %r24 (state[3][i] ^ state[0][i]).
+      next %ip, %r1                   // Next statement.
+--- //
+      zero %r33                       // %r33 will be used for calling XTime.
+      xor %r31 < %r31, %r23           // %r31 = state[3][i](=%r31) ^ Tmp(=%r23)    
+      xori %r33 < XTime               // %r33 points to XTime routine.
+      next %ip, %r1                   // Next statement.
+--- // 
+      zero %r32                       // Now multiply %r24 (Tm) by {02}
+      xori %r32, label_mixcols_xtime4 // Ret address in %r32.
+      // Calling convention: %r24 holds x value (Tm), %r32 hold ret address, value return via %r24   
+      next %r0, %r33                  // Jump to the XTime routine.
+--- //
+label_mixcols_xtime4:
+      xor %r31 < %r31, %r24           // %r31 = %r31 ^ Tm.
+      storereg %r30, %r31             // %r30 points to state[3][i].
+      next %ip, %r1                   // Next statement.
+--- //  131  
+      //
+      // Advance bias, for counter and jump to loop start.
+      // 
+      add %r26 < %r26, %r4            // add 4 to bias (%r26)
+      next %ip, %r1                   // Next statement.    
+--- //        
+      zero %r22  
+      xori %r22 < label_mixcols_for   // %r22 now points to label_mixcols_for
+      add %r21 < %r21, %r1            // inc loop counter (%r17)
+      next %r0, %r22                  // Set IP to label_sbytes_for.         
+--- //  
+
+
+// ====================================================================  
+AddRoundKey:
+   //
+   // Adds the round key to state array. round number is stored in %r20.
+   // The round key is added to the state by an XOR function.
+   // for(i=0;i=<15;i++)
+   //  {
+   //	  state[i](@%r23) = state[i](=%r25) ^ roundKey[%r20 * 4 * 4 + i(=%r21)];
+   //  }
+   //
+   // Regs used: %r21 (=i) is the loop counter, %r22 checks the loop condition
+   //            %r23 points to state[i], %r24 points to roundKey[round * 16],
+   //            %r25 holds value stored in state[i].
+   //            %r26 holds value stored in roundKey[round * 16 + i].
+   //
+   zero %r24                       // %r24 should points to roundKey[%r20 * 16].
+   xori %r24 < roundKey            // %r24 now 'points' to roundKey[0].
+   rol %r25 < %r20, %r4            // %r25 holds [round * 16].
+   next %ip, %r1                   // Advance to next statement.   
+--- //  134
+   zero %r21                       // Reset for counter.
+   add %r24 < %r24, %r25           // %r24 now 'points' to roundKey[%r20 * 16].
+   next %ip, %r1                   // Advance to next statement.   
+--- //  135
+   
+label_ark_for:  
+//  for (%r21 = 0 ; %r21 =< %r15; %r21++)
+      //
+      // Loop condition check.
+      //
+      zero %r22                       //
+      xor %r22 < %r22, %r15           // Load %r22 with loop stop value and negate.
+      xori %r22 < 0xFFFF              //
+      add %r22 < %r22, %r21 
+      mux %r22 < %carry, %r2, %r1     // carry is set while condition is false (last reg op (%r1) is assigned to %r22).
+      next %ip, %r22                  // Set IP. 
+--- //  136
+      next %r0, %retAddr              // For loop ended - Set IP to the pre-prepared ret address in %r[retAddr].
+--- //   
+      zero %r23                       // Get value of state[i(= %r21)].
+      xori %r23 < state               // %r23 now 'points' to state[0].
+      add %r23 < %r23, %r21           // %r23 points to state[i].
+      loadreg %r25, %r23              // %r25 contains the value stored in state[i].
+      next %ip, %r1                   // Next statement.
+--- //  138
+      zero %r26                       // Get value at roundKey[%r20 * 16 + %r21].
+      xor %r26 < %r26, %r24           // %r26 = roundKey[%r20 * 16].
+      add %r26 < %r26, %r21           // %r26 points to roundKey[%r20 * 16 + %r21].
+      loadreg %r26, %r26              // %r26 = roundKey[%r20 * 16 + %r21].
+      next %ip, %r1                   // Next statement.
+--- //  139
+      xor %r25 < %r25, %r26           // %r25 = state[i](=%r25) ^ roundKey[%r20 * 16 + %r21](=%r26).
+      storereg %r23, %r25             // Store %r25 in state[i].        
+      next %ip, %r1                   // Next statement.
+--- //  140
+      //
+      // Advance for counter and jump accordingly.
+      // 
+      zero %r22  
+      xori %r22 < label_ark_for       // %r22 now points to label_ark_for
+      add %r21 < %r21, %r1            // inc loop counter (%r17)
+      next %r0, %r22                  // Set IP to label_sbytes_for.         
+--- //  
+
+
+// ====================================================================
+XTime: 
+// xtime is a macro that finds the product of {02} and the argument to xtime modulo {1b}  
+// #define xtime(x)   ((x<<1) ^ (((x>>7) & 1) * 0x1b))
+//                      %r34         %r35       %r33
+// Regs used: %r34, %r35 for storing temp values.
+// Caller regs: %r24 holds x value, %r32 hold ret address, new value returned via %r24
+//
+   zero %r33                       //
+   xori %r33 < 0x1B                // %r33 now holds 0x1b
+   rol %r34 < %r24, %r1            // %r34 now holds x << 1
+   and %r34 < %r34, %r16           // truncate left bits (if any). %r16 = 0xFF (fixed reg).
+   next %ip, %r1                   // Next statement.
+--- //  142
+   rol %r35 < %r24, %r9            // %r35 now holds x >> 7 (=shl 9). %r9 = 9 (fixed reg)
+   and %r35 < %r35, %r1            // %r35 now holds x >> 7 & 1 (%r1 = 1 (fixed reg)).
+   next %ip, %r1                   // Next statement.
+--- //
+   //mul %r36 < %r33, %r35         // %r36 now holds %r35 * %r33
+   mux %r36 < %r35, %r0, %r33      // Same as line above (since %r35 can only be 0 or 1)
+   next %ip, %r1                   // Next statement.
+--- //
+   xor %r24 < %r34, %r36           // Final value stored in %r24.
+   next %r0, %r32                  // Set IP to the pre-prepared ret address in %r[32].
+--- //

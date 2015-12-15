@@ -1,0 +1,8 @@
+Computation Result (Program counter = 08986) =  4164982000
+Computation Result (Program counter = 08990) =  2948
+Computation Result (Program counter = 08994) =  0
+Computation Result (Program counter = 08998) =  0
+Computation Result (Program counter = 09002) =  1602982719
+Computation Result (Program counter = 09006) =  2719020343
+Computation Result (Program counter = 09010) =  0
+Computation Result (Program counter = 09014) =  0

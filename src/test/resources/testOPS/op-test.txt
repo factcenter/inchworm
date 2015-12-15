@@ -1,0 +1,171 @@
+
+.header
+wordsize: 12      // 
+regptrsize: 6     // 64 regs
+romptrsize: 5     // 32 instructions
+ramptrsize: 4     // NA
+counters:   4  6  //                  div:4 mul:6 
+instruction: zero xori xor rol and or div:4 mul:6 loadreg storereg add out mux halt *next 
+
+.const
+    minus_one = -1
+
+.data                //  !  !  !
+//           r0  r1 r2 r3 r4 r5 r6 r7 r8 r9 r10
+//%r[0] =    111, 1, 2, 3, 4, 5, 6, 7, 8, 9, 20
+//%r[19] = 0xfff
+//%r[20] = 0xdaa
+//%r[21] = 0xfff
+
+.code
+    zero %zero
+
+   // xori %ctrl < 0x01               // load ctrl-reg with the out-stream value.
+
+    rol %r5 < %r4, %r3              // %r5 = %r4 rol %r3 (= 32 (4 rol 3))
+    and %r6 < %r4, %r8              // %r6 = 0
+    or %r7 < %r4, %r8               // %r7 = 12
+
+    //add %r[out2] < %r[out2], %r[20]    // store %r5 (=32) in out register.
+    //out
+
+    mux %r11 < %r3, %r2, %r3        // %r11 = %r3 (=3)
+    next %ip, %r1                   // Advance to next statement (ip=ip+1)    
+---                                 // instr #1
+
+    zero %r[out2]
+    xori %ctrl < 0x01               // load ctrl-reg with the out-stream value.
+    xor %out2 < %r[20], %out2
+    add %r[out1] < %r[out1], %r5    // store %r5 (=32) in out register.
+    out								// out1=32, out2=0xdaa (3498)
+    next %ip, %r1                   // Advance to next statement    
+---                                 // instr #2
+
+    zero %r[out2]
+    add %r[out2] < %r[out2], %r5    //
+    out								// out1=32, out2=32
+    next %ip, %r1                   // Advance to next statement    
+---                                 // instr #3
+
+    zero %r[out2]
+    xori %r6 < 0x355				// r6=853
+    add %r[out2] < %r[out2], %r6    // store %r6 (=0x355) in out register.
+    out								// out1=32, out2=853
+    next %ip, %r1                   // Advance to next statement    
+---                                 // instr #4
+
+    zero %r[out2]
+    add %r[out2] < %r[20], %r6    	// %r[out2]=0xdaa+0x355 = 0x10ff (0x0ff restricted to 12 bits)
+    out								// out1=32, out2=0x0ff (255)
+    next %ip, %r1                   // Advance to next statement    
+---                                 // instr #5
+
+    zero %r[out1]
+    add %r[out1] < %r[out1], %r7    // store %r7 (=12) in out register.
+    out								// out1=12, out2=255
+    next %ip, %r1                   // Advance to next statement    
+---                                 // instr #6
+
+    zero %r[out2]
+    add %r[out2] < %r[out2], %r7    //
+    out								// out1=12, out2=12
+    next %ip, %r1                   // Advance to next statement    
+---                                 // instr #7
+
+    zero %r[out1]
+    add %r[out1] < %r[out1], %r11   // store %r11 (=3) in out register.
+    out								// out1=3, out2=12
+    next %ip, %r1                   // Advance to next statement    
+---                                 // instr #8
+
+    zero %r[out2]
+    add %r[out2] < %r[out2], %r11   //
+    out								// out1=3, out2=3
+    next %ip, %r1                   // Advance to next statement    
+---                                 // instr #9
+
+    zero %ctrl                      // reset ctrl-reg (no out while the loop waits).
+    div %r6 < %r7, %r9              // result = %r6 = 1, %r7 = 3
+    								// out1=3, out2=3
+    next %ip, %ctr4                 // loop until the div statement can execute.
+---                                 // instr #10
+
+    zero %r[out1]
+    xori %ctrl < 0x01               // load ctrl-reg with the out-stream value.
+    add %r[out1] < %r[out1], %r6    // store %r6 (=1) in out register.
+    								// out1=1, out2=3
+    next %ip, %r1                   // Advance to next statement
+---                                 // instr #11
+
+    zero %r[out2]
+    add %r[out2] < %r[out2], %r6    //
+    								// out1=1, out2=1
+    next %ip, %r1                   // Advance to next statement
+---                                 // instr #12
+
+    zero %r[out1]
+    add %r[out1] < %r[out1], %r7    // store %r7 (=3) in out register.
+    								// out1=3, out2=1
+    next %ip, %r1                   // Advance to next statement
+---                                 // instr #13
+
+    zero %r[out2]
+    add %r[out2] < %r[out2], %r7    //
+    								// out1=3, out2=3
+    next %ip, %r1                   // Advance to next statement
+---                                 // instr #14
+
+    zero %ctrl                      // reset ctrl-reg (no out while the loop waits).
+    mul %r6 < %r9, %r2              // %r6 (= 18 (9 * 2)), %r7 = 0
+    								// out1=3, out2=3
+    next %ip, %ctr6                 // loop until the mul statement can execute.
+---                                 // instr #15
+
+    zero %r[out1]
+    xori %ctrl < 0x01               // load ctrl-reg with the out-stream value.
+    add %r[out1] < %r[out1], %r6    // store %r6 (=18) in out register.
+    out								// out1=18, out2=3
+    next %ip, %r1                   // Advance to next statement
+---                                 // instr #16
+
+    zero %r[out2]
+    add %r[out2] < %r[out2], %r6    //
+    out								// out1=18, out2=18
+    next %ip, %r1                   // Advance to next statement
+---                                 // instr #17
+
+    zero %r[out1]
+    add %r[out1] < %r[out1], %r7    // store %r7 (=0) in out register.
+    out								// out1=0, out2=18
+    next %ip, %r1                   // Advance to next statement
+---                                 // instr #18  
+
+    zero %r[out2]
+    add %r[out2] < %r[out2], %r7    //
+    out								// out1=0, out2=0
+    next %ip, %r1                   // Advance to next statement
+---                                 // instr #19  
+
+    loadreg %r5, %r10               // %r5 = %r[%r10] (%r10=20, %r[20]=3498).
+    storereg %r6, %r5               // %r[%r6] = %r5 (%r6=0, %r5=3498).
+    out								// out1=0, out2=0
+    next %ip, %r1                   // Advance to next statement
+---                                 // instr #20
+
+    zero %r[out1]
+    xor %r0 < %r5, %r7              // %r0 = %r5(=3498)^%r7(=0)
+    add %r[out1] < %r[out1], %r0    // store %r0 (=3498) in out register.
+    out								// out1=3498, out2=0
+    next %ip, %r1                   // Advance to next statement
+---                                 // instr #21  
+
+    zero %r[out2]
+    add %r[out2] < %r[out2], %r0    // out2=r0=3498
+    out								// out1=3498, out2=3498
+    next %ip, %r1                   // Advance to next statement
+---                                 // instr #22  
+
+    zero %ctrl                      // Stop condition
+    xori %ctrl, 0xFFFF              // Value bigger than max-word.
+    next %ip, %r1
+---                                 // instr #23  

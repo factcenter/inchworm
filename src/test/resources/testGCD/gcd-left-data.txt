@@ -1,0 +1,12 @@
+.const
+    one = 1
+    two = 2
+    three = 3
+    minus_one = -1
+    minus_three = -3
+
+.data
+	%r0 db 0, 0, 1101820, 804700
+	%r5 = (-3)                      // -3 still breaks the code - only (-3) works...
+	%r6 = (one), (three), 0
+	%r9 = (minus_three)

@@ -1,0 +1,80 @@
+.header
+wordsize: 10			// Note: wordsize cannot be smaller than any of the pointer sizes
+regptrsize: 7
+romptrsize: 6
+ramptrsize: 7
+// Define the opcodes in an instruction. '*' indicates a mandatory opcode: the assembler will exit with
+// an error if you try to skip it.
+instruction: zero xori xori add add mul:10 rol mux *next 
+
+.const
+	two=(4*5)+6-24
+	three=label1 << 2
+	four=4*(5+6)-(40+7)
+	test = label2+three
+	
+.data
+	%r0 db 	-100 (~1) (two) (four) ($)	// You can put constant expression in parenthesis, including label references
+							   		// $ in a constant expression is the current location (register or instruction)
+									// Any references must be resolvable in the second pass  
+
+
+ regLabel: 						// Labels reference the *next* register location or byte to be written.
+ 	// should be 0x20
+ 	
+	%r[0x20] =
+		0x20, 0x30, 1, 2,3,4,5
+		
+	%r[0x30] = 1 2 3
+	
+	
+ regLabel2: $ 					// To reference the previously written location, use $ 
+ 								// Note the difference between ($) and $: the first is a constant expression
+ 								// that resolves to the current register location; the second is a location (shorthand for %r[$]) 
+	
+	%r[0x40]:
+		0x75 (regLabel) (regLabel2) ($) ($) ($) ($)
+	
+ 	%r[$+5]:					// Using $ lets us 'skip' registers.
+		"Another \"test\"\n"
+		
+ label3:		
+ label4: 		
+	%zero: 1					// We can give alternate names to existing named registers
+	%carry: 2
+	%out1: 0xaa
+	%out2: 55h 	
+
+  	
+  one: // Name the last free register '1' and initialize to 1.
+  	%r[freeregs - 1]: 90h
+	
+.code
+	zero %regLabel		// When a register label is defined, we can use it as an alternate name for a register
+	xori %r10 < 0x303 // comment2
+	xori %r[two] < ~0xaaaaaa
+	add %r[regLabel] < %r[label3], %r2
+	mul %zero < %r1, %r[regLabel+1]
+	rol %carry < %r[carry+two*4], %r2 
+	next %ip, %r[one]
+---
+	zero %r7
+	xori %r[5] < nop
+	xori %r7 < label2
+	mux nop
+	next %r7, %nop 
+---	
+	add nop
+	add %r88 < %ip,%r30
+	next %ip, %one
+---
+label1:
+	zero %r40
+	xori %carry,three
+	next %ip, %one
+---
+label2:
+	xori %r1 < label1
+	// out
+	add %r[0x30] < %r[15], %r6
+	next %ip, %one

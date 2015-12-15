@@ -1,0 +1,2 @@
+Computation Result (Program counter = 00022) =  0
+Computation Result (Program counter = 00023) =  12380

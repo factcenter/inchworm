@@ -1,0 +1,9 @@
+.const
+    minus_one = -1
+
+.data                //  !  !  !
+//      r0  r1 r2 r3 r4 r5 r6 r7 r8 r9 r10
+%r[0] = 111, 1, 2, 3, 4, 5, 6, 7, 8, 9, 20
+%r[19] = (0xfff ^ 0x1aa)
+%r[20] = (0xdaa ^ 0x1ff)
+%r[21] = (0xfff ^ 0x255)

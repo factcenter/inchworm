@@ -1,0 +1,308 @@
+//
+//   BIG MUL for two numbers a and b.  
+//
+//    assume:   a[0]...a[n-1] is the first number.
+//              b[0]...b[n-1] is the second.
+//              c[0]...c[2n-1] is the result.
+//
+//    initialize c[0]...c[2n-1] to zero
+//
+//    for i = 0 to n
+//      for j = 0 to n
+//        (mulHi,mulLo) = a[i] * b[j]  // use the mul op
+//        c[i+j] += mulLo;             // handle carry.
+//        c[i+j+1] += mulHi
+//
+ 	
+.header
+wordsize: 32
+regptrsize: 7                  // 128 regs (enough for multiplying two 512 bit integers (16 * 32bit) mulWidth = 16, wordsize = 32).
+romptrsize: 5                  // Space for storing 32 instructions.
+ramptrsize: 0
+counters:   9
+instruction: add mul:9 loadreg add storereg out halt mux *next 
+
+.const
+mulWidth = 4
+
+.data
+// ============================
+// REGISTERS HOLDING FIXED VALUES.
+// ============================
+r_zero:
+0
+r_one:
+1
+r_two:
+2
+r_minusone:
+-1
+r_regProp:                     // Code 'pointers'.
+(label_carry_propagate)
+r_label_for1:
+(label_for1)
+r_label_for2:
+(label_for2)
+r_label_update_hi:
+(label_update_hi)
+r_label_update_done:
+(label_update_done)
+r_label_end_for1:
+(label_end_for1)
+r_label_end_for2:              // r[10]
+(label_end_for2)
+r_label_saveresults_for:
+(label_saveresults_for)
+r_label_end_program:
+(label_end_program)
+
+// ============================
+// REGISTERS USED FOR CALCULATION.
+// ============================
+r_regRet:                      // Return address register.
+0
+r_regMulLo:                    // Register holding multiplication result.
+0
+r_regMulHi:
+0
+r_regCheck1:                   // Number of for loop iterations.
+0
+r_regCheck2:
+0
+r_regFor1:                     // Outer for counter.
+0
+r_regFor2:                     // Inner for counter.
+0
+r_regVal1:                     // %r[20]
+0
+r_regVal2:
+0
+r_regNdx1:
+0
+r_regNdx2:
+0
+r_regNdx3:                     // Points to result[*]
+0
+r_regNdx4:                     // Points to result[*]
+0
+r_regTmpLo:
+0
+r_regTmpHi:
+0
+
+r_mulWidth:                    // = %r[28]
+%r[$] = (mulWidth)
+r_numA:                        // Points to numA[0]
+%r[$] = ($ + 3)
+r_numB:                        // Points to numB[0]
+%r[$] = ($ + 2 + mulWidth)
+r_result:                      // Points to result[0]
+%r[$] = ($ + 1 + 2 * mulWidth)
+
+// ============================
+// Registers used for  storage.
+// ============================
+numA:                                    // LS word first.
+%r[$] = 0xAAAA,0xBBBB,0xCCCC,0xDDDD      // = r[32]
+
+numB:
+%r[$] = 0xCCCC,0xDDDD,0xEEEE,0xFFFF      // = r[36]
+
+result:
+%r[$] = 0, 0, 0, 0, 0, 0, 0, 0           // = r[40]
+
+.code
+
+// ====================================================================
+//          1) init vars.
+// ====================================================================
+add %r_regCheck1 < %r_one, %r_mulWidth                     //  Copy mulWidth to %r_regCheck1
+next %ip, %r_one                                           //
+--- //  0
+
+// ====================================================================
+//         2) main loops.
+// ====================================================================  
+label_for1:
+//---We are doing n rounds (value in %r_mulWidth).
+//   for (%r_regFor1 = 0 ; %r_regFor1 < %r_mulWidth; %r_regFor1++)   
+        //
+        // Loop condition check.
+        //
+        add %r_zero < %r_zero, %r_zero                     // Dummy add to avoid referencing the wrong flag.
+        add %r_regCheck1 < %r_regCheck1, %r_minusone       // number of rounds.
+        mux %r_regRet < %zero, %r_two, %r_one              // zero is set while condition is true (last reg op is assigned to %r_regRet).
+        next %ip, %r_regRet                                // Branch to next statement. 
+--- //  1
+        next %r_zero, %r_label_end_for1                    // Exit the main for loop by setting IP to label_end_for1.
+--- //  2
+		    add %r_regFor2 < %r_zero, %r_zero                  // Zero regFor2
+        add %r_regCheck2 < %r_one, %r_mulWidth             //  Copy mulWidth to %r_regCheck2
+        next %ip, %r_one                                   //
+--- //  3
+label_for2:    
+//------We are doing n rounds (value in %r_mulWidth).
+//      for (%r_regFor2 = 0 ; %r_regFor2 < %r_mulWidth; %r_regFor2++)
+            //
+            // Loop condition check.
+            //
+            add %r_zero < %r_zero, %r_zero                 // Dummy add.
+            add %r_regCheck2 < %r_regCheck2, %r_minusone   // number of rounds.
+            mux %r_regRet < %zero, %r_two, %r_one          // zero is set while condition is true (last reg op is assigned to %r_regRet).
+            next %ip, %r_regRet                            // Branch to next statement. 
+--- //  4
+            next %r_zero, %r_label_end_for2                // Exit the inner for loop by setting IP to label_end_for2.
+--- //  5
+            //
+            // Load values into regs.
+            //
+				    add %r_regNdx1 < %r_numA, %r_regFor1           // regNdx1 'points' to numA[%r_regFor1].
+				    loadreg %r_regVal1, %r_regNdx1                 // %r_regVal1 contains the value stored in numA[regFor1].
+            add %r_regNdx3 < %r_result, %r_regFor1         // regNdx3 'points' to result[regFor1].
+				    next %ip, %r_one                               //
+--- //  6
+				    add %r_regNdx2 < %r_numB, %r_regFor2           // regNdx2 'points' to numB[%r_regFor2].
+				    loadreg %r_regVal2, %r_regNdx2                 // %r_regVal2 contains the value stored in numB[regFor2].
+				    add %r_regNdx3 < %r_regNdx3, %r_regFor2        // regNdx3 'points' to result[regFor1 + regFor2].
+				    next %ip, %r_one                               //
+--- //  7
+            //
+            // Multiply the numbers (Low part in %r_regMulLo, high part in %r_regMulHi).
+            //
+            mul %r_regMulLo < %r_regVal1, %r_regVal2       //
+            next %ip, %ctr9                                // loop until the mul statement can execute.
+--- //  7a                                                 // new instruction.
+            loadreg %r_regTmpLo, %r_regNdx3                // load intermidiate lo-result.
+						//
+						// Handle carry propagation (low + high).
+						//
+            add %r_regRet < %r_zero, %r_label_update_hi    // regRet 'points' to the high carry propagation code.               
+				    next %ip, %r_one                               //        
+--- //  8                 
+            add %r_zero < %r_zero, %r_zero                 // Dummy add.
+            add %r_regTmpLo < %r_regTmpLo, %r_regMulLo     // Update regTmpLo.
+            storereg %r_regNdx3, %r_regTmpLo               // Store new value.
+            //
+            // If carry is set jump to propagate carry, else jump to label_update_hi.
+            //
+            mux %r_regTmpLo < %carry, %r_regRet, %r_regProp
+				    next %r_zero, %r_regTmpLo                      // Branch to next statement.
+--- //  9
+label_update_hi:
+						add %r_regNdx3 < %r_regNdx3, %r_one            // regNdx3 'points' to result[regFor1 + regFor2 + 1].
+            loadreg %r_regTmpHi, %r_regNdx3                // load intermidiate hi-result.						
+            add %r_regRet < %r_zero, %r_label_update_done  // regRet 'points' past the carry propagation code.               
+				    next %ip, %r_one                               //            
+--- //  10             
+            add %r_zero < %r_zero, %r_zero                 // Dummy add.
+            add %r_regTmpHi < %r_regTmpHi, %r_regMulHi     // Update regTmpHi.
+            storereg %r_regNdx3, %r_regTmpHi               // Store new value.
+            //
+            // If carry is set jump to propagate carry, else jump to label_update_done.
+            //
+            mux %r_regTmpHi < %carry, %r_regRet, %r_regProp
+				    next %r_zero, %r_regTmpHi                      // Branch to next statement.						
+--- //  11						
+label_update_done:						
+			      //
+			      // Advance for2 counter and jump accordingly.
+			      // 
+			      add %r_regFor2 < %r_regFor2, %r_one            // inc loop counter
+			      next %r_zero, %r_label_for2                    // Set IP to label_for2.         
+--- //  12
+label_end_for2:
+			  //
+			  // Advance for1 counter and jump accordingly.
+			  // 
+			  add %r_regFor1 < %r_regFor1, %r_one                // inc loop counter
+			  next %r_zero, %r_label_for1                        // Set IP to label_for1.         
+--- //  13
+label_end_for1:
+
+// ====================================================================
+//         3) save results.
+// ====================================================================   
+   //
+   // Outputs the values in the result array.
+   //
+   // Regs used: %r_regFor1 is the loop counter.
+   //            %r_mulWidth holds number of iterations.
+   //            %r_regCheck1 checks the loop condition.
+   //            %r_regVal1 stores the value to write out.
+   //            %r_regNdx3 points to result[i].
+   //
+   add %r_regFor1 < %r_zero, %r_zero                       // Reset for counter.
+   add %r_regCheck1 < %r_mulWidth, %r_mulWidth             // Double count of rounds for the result width.
+   next %ip, %r_one                                        //
+--- //  14
+   add %r_regCheck1 < %r_regCheck1, %r_one                 //
+   next %ip, %r_one                                        //
+--- //  15
+label_saveresults_for:  
+//  for (%r_regFor1 = 0 ; %r_regFor1 < %r_mulWidth; %r_regFor1++)
+      //
+      // Loop condition check.
+      //
+      add %r_zero < %r_zero, %r_zero                       // Dummy add.
+      add %r_regCheck1 < %r_regCheck1, %r_minusone         // decrement number of rounds.
+      mux %r_regRet < %zero, %r_two, %r_one                // zero is set while condition is true (last reg op is assigned to %r_regRet).      
+      next %ip, %r_regRet                                  // Branch to next statement. 
+--- //  16
+      next %r_zero, %r_label_end_program                   // Jump to program ending statement.
+--- //  17
+      add %r_regNdx3 < %r_result, %r_regFor1               // %r_regNdx3 points to result[i].
+      loadreg %r_regVal1, %r_regNdx3                       // %r_regVal1 contains the value stored in (result[i]).
+      add %r[out1] < %r_zero, %r_regVal1                   // store current value in out register.
+      next %ip, %r_one                                     //
+--- //  18
+      add %r[out2] < %r_zero, %r_regVal1                   // store current value in out register.
+      add %ctrl < %r_zero, %r_one                          // load ctrl-reg with the out-stream value.
+      out                                                  // RESULT OF MUL.
+      next %ip, %r_one                                     //
+--- //  19
+      add %ctrl < %r_zero, %r_zero                         // Reset conrtol reg.
+      //
+      // Advance for counter and jump accordingly.
+      // 
+      add %r_regFor1 < %r_regFor1, %r_one                  // inc loop counter (%r_regFor1)
+      next %r_zero, %r_label_saveresults_for               // Set IP to label_saveresults_for.         
+--- //  20
+
+
+// ====================================================================
+//         4) end program.
+// ====================================================================   
+label_end_program:
+      add %ctrl < %r_zero, %r_minusone                     // load ctrl-reg with the stop condition value.
+      halt
+      next %ip, %r_one
+--- //  21
+
+// ====================================================================
+//         5) Carry propagation.
+// ====================================================================
+label_carry_propagate:
+      //
+      // %r_regNdx3 holds the index of the word that caused carry.
+      //
+      add %r_regNdx4 < %r_regNdx3, %r_one                  // Increment index to next word.
+      loadreg %r_regVal1, %r_regNdx4                       // load word to update.
+      next %ip, %r_one                                     //
+--- //  22
+label_carry_next:
+      add %r_zero < %r_zero, %r_zero                       // Dummy add.
+      add %r_regVal1 < %r_regVal1, %r_one                  // Increment next word.
+      storereg %r_regNdx4, %r_regVal1                      // Store new value.
+      //
+      // If carry is set continue to next word, else jump to the return command.
+      //
+      mux %r_regTmpLo < %carry, %r_two, %r_one
+      next %ip, %r_regTmpLo                                // Branch to next statement.
+--- //  23
+      add %r_regNdx4 < %r_regNdx4, %r_one                  // Increment index to next word.
+      loadreg %r_regVal1, %r_regNdx4                       // load word to update.		
+      next %ip, %r_minusone                                // Jump back to label_carry_next.
+--- //  24
+label_prop_done:
+      next %r_zero, %r_regRet                              // Set IP to the pre-prepared ret address in %r_regRet.
+--- //  25

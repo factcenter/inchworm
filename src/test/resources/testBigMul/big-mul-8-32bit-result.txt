@@ -1,0 +1,8 @@
+Computation Result (Program counter = 00231) =  108
+Computation Result (Program counter = 00235) =  237
+Computation Result (Program counter = 00239) =  132
+Computation Result (Program counter = 00243) =  51
+Computation Result (Program counter = 00247) =  206
+Computation Result (Program counter = 00251) =  78
+Computation Result (Program counter = 00255) =  181
+Computation Result (Program counter = 00259) =  0

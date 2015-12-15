@@ -1,0 +1,69 @@
+//  
+//  
+//   GCD LOGIC for two numbers a and b, where a > b.  
+//
+//      while(1)
+//      {
+//    	    c = a%b;             
+//    	    if(c==0)             
+//     	        return b;         
+//   	    a = b;               
+//    	    b = c;               
+//      }                    
+//  
+//
+ 	
+.header
+wordsize: 64
+regptrsize: 5
+romptrsize: 4
+ramptrsize: 4
+instruction: zero xori xor add div:4 halt out mux *next 
+
+.const
+    one = 1                         // Using a code keyword (like zero = 0) breaks the assembly process.
+    two = 2
+    three = 3
+    minus_one = 0 - one
+    minus_three = -3                // -3 can be used now...
+
+.data
+	%r0 db 0, 0, 1101820, 804700    // use db or =
+	%r5 = (-3)                      // -3 still breaks the code - only (-3) works...
+	%r6 = (one), (three), 0
+	%r9 = (minus_three)             //
+	%r10 = 3                        //
+
+.code
+    zero %zero  
+    div %r0 < %r2, %r3              // result: %r1 = a % b
+    next %ip, %r6                   // Advance to next statement
+---                                 // instr #1  
+    zero %r5     
+    add %r5 < %r5, %r1              // fz will be set if r5 = 0.
+    mux %r8 < %zero, %r6, %r7       // jmp +1 if not zf, else jmp +3
+    next %ip, %r8                   // Advance to next statement  
+---                                 // instr #2  
+    zero %r8                        // zf was not set in instr #2.
+    add %r2 < %r3, %r8              // %r2 <- %r3 (%r8 = 0)
+    next %ip, %r6                   // Advance to next statement
+---                                 // instr #3  
+    zero %r5
+    add %r3 < %r1, %r5              // %r3 <- reminder
+    next %ip, %r9                   // Loop back -3 instructions to first statement.
+---                                 // instr #4 
+    zero %r[out1]
+    xori %ctrl < 0x01               // load ctrl-reg with the out-stream value.
+    add %r[out1] < %r[out1], %r3    // store GCD in out register.
+    next %ip, %r6                   // Advance to next statement  
+---                                 // instr #5
+    zero %r[out2]
+    add %r[out2] < %r[out2], %r3    // store GCD in out register.
+    out                             // RESULT OF GCD.
+    next %ip, %r6                   // Advance to next statement  
+---                                 // instr #6  
+    zero %ctrl
+    xori %ctrl < 0xFFFFFFFF         // load ctrl-reg with the exit value (stop condition).
+    halt
+    next %ip, %r6                   // Advance to next statement  
+---                                 // instr #7
